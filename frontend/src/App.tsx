@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { BookOpen, FileText, Home, Plus, Settings2, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import './App.css';
 import { configApi } from './api/config';
@@ -6,6 +6,7 @@ import { ModelDiscoveryModal } from './components/ModelDiscoveryModal';
 import { HomePage } from './components/HomePage';
 import { ReaderTab } from './components/ReaderTab';
 import { Button } from './components/ui/Button';
+import { getErrorMessage } from './lib/errors';
 import {
   createProviderFromTemplate,
   findMatchingProviderTemplate,
@@ -328,10 +329,17 @@ export default function App() {
     }
   };
 
-  const handleRuntimePathChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    const path = file && 'path' in file && typeof file.path === 'string' ? file.path : '';
-    setRuntimeImportPath(path || file?.name || '');
+  const handleSelectRuntimePackage = async () => {
+    try {
+      const selectedPath = await configApi.selectPDFTranslateRuntimePackage();
+      if (selectedPath.trim()) {
+        setRuntimeImportPath(selectedPath.trim());
+      }
+    } catch (error) {
+      useConfigStore.setState({
+        error: getErrorMessage(error, 'Failed to choose PDF translation runtime package'),
+      });
+    }
   };
 
   const handleImportRuntime = async () => {
@@ -475,7 +483,7 @@ export default function App() {
                   runtime={snapshot.pdfTranslateRuntime}
                   runtimeImportPath={runtimeImportPath}
                   runtimeAction={runtimeAction}
-                  onRuntimePathChange={handleRuntimePathChange}
+                  onSelectRuntimePackage={handleSelectRuntimePackage}
                   onImportRuntime={handleImportRuntime}
                   onRemoveRuntime={handleRemoveRuntime}
                 />
@@ -564,7 +572,7 @@ interface PDFTranslateRuntimeCardProps {
   runtime: PDFTranslateRuntimeConfig;
   runtimeImportPath: string;
   runtimeAction: 'idle' | 'importing' | 'removing';
-  onRuntimePathChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSelectRuntimePackage: () => void;
   onImportRuntime: () => void;
   onRemoveRuntime: () => void;
 }
@@ -573,7 +581,7 @@ function PDFTranslateRuntimeCard({
   runtime,
   runtimeImportPath,
   runtimeAction,
-  onRuntimePathChange,
+  onSelectRuntimePackage,
   onImportRuntime,
   onRemoveRuntime,
 }: PDFTranslateRuntimeCardProps) {
@@ -608,7 +616,9 @@ function PDFTranslateRuntimeCard({
 
       <label className="field">
         <span>运行时安装包</span>
-        <input type="file" accept=".zip" onChange={onRuntimePathChange} />
+        <Button variant="outline" onClick={() => void onSelectRuntimePackage()} disabled={runtimeAction !== 'idle'}>
+          Select ZIP Package
+        </Button>
       </label>
       <p className="field-hint">{runtimeImportPath || '请选择从 release 下载的运行时 zip 包。Wails 桌面环境会把文件路径传给后端。'}</p>
 

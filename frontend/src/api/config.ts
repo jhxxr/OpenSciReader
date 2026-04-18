@@ -25,6 +25,7 @@ interface WailsApp {
     input: AIWorkspaceConfig,
   ) => Promise<AIWorkspaceConfig>;
   GetPDFTranslateRuntimeStatus: () => Promise<PDFTranslateRuntimeConfig>;
+  SelectPDFTranslateRuntimePackage: () => Promise<string>;
   ImportPDFTranslateRuntime: (packagePath: string) => Promise<{ runtime: PDFTranslateRuntimeConfig }>;
   RemovePDFTranslateRuntime: () => Promise<void>;
   SaveProvider: (input: ProviderUpsertInput) => Promise<ProviderRecord>;
@@ -176,6 +177,10 @@ function createMockApp(): WailsApp {
     GetPDFTranslateRuntimeStatus: async () => {
       await delay(80);
       return snapshot.pdfTranslateRuntime;
+    },
+    SelectPDFTranslateRuntimePackage: async () => {
+      await delay(80);
+      return "C:/Users/demo/Downloads/OpenSciReader-pdf-runtime-windows-amd64-mock.zip";
     },
     ImportPDFTranslateRuntime: async (packagePath) => {
       await delay(180);
@@ -352,6 +357,9 @@ export const configApi = {
   },
   getPDFTranslateRuntimeStatus(): Promise<PDFTranslateRuntimeConfig> {
     return app.GetPDFTranslateRuntimeStatus();
+  },
+  selectPDFTranslateRuntimePackage(): Promise<string> {
+    return app.SelectPDFTranslateRuntimePackage();
   },
   importPDFTranslateRuntime(packagePath: string): Promise<{ runtime: PDFTranslateRuntimeConfig }> {
     return app.ImportPDFTranslateRuntime(packagePath);

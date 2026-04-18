@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { configApi } from '../api/config';
+import { getErrorMessage } from '../lib/errors';
 import type {
   ConfigSnapshot,
   ModelRecord,
@@ -90,7 +91,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : 'Failed to load configuration',
+        error: getErrorMessage(error, 'Failed to load configuration'),
       });
     }
   },
@@ -104,7 +105,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       });
       return result.runtime;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to import PDF translation runtime';
+      const message = getErrorMessage(error, 'Failed to import PDF translation runtime');
       set({ runtimeAction: 'idle', error: message });
       throw error;
     }
@@ -119,7 +120,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         runtimeAction: 'idle',
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to remove PDF translation runtime';
+      const message = getErrorMessage(error, 'Failed to remove PDF translation runtime');
       set({ runtimeAction: 'idle', error: message });
       throw error;
     }
@@ -136,7 +137,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       });
       return provider;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save provider';
+      const message = getErrorMessage(error, 'Failed to save provider');
       set({ isLoading: false, error: message });
       throw error;
     }
@@ -151,7 +152,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : 'Failed to delete provider',
+        error: getErrorMessage(error, 'Failed to delete provider'),
       });
     }
   },
@@ -165,7 +166,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       });
       return model;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save model';
+      const message = getErrorMessage(error, 'Failed to save model');
       set({ isLoading: false, error: message });
       throw error;
     }
@@ -188,7 +189,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         isLoading: false,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete model';
+      const message = getErrorMessage(error, 'Failed to delete model');
       set({
         isLoading: false,
         error: message,
