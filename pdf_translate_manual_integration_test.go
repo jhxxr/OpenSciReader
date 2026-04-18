@@ -136,6 +136,10 @@ func TestManualPreviewExportReuseForWang2017(t *testing.T) {
 		strings.TrimSpace(exportFinal.Outputs.MonoPDFPath) == "" {
 		t.Fatalf("export mono output path is empty")
 	}
+	if strings.TrimSpace(exportFinal.Outputs.NoWatermarkMixedPDFPath) == "" &&
+		strings.TrimSpace(exportFinal.Outputs.MixedPDFPath) == "" {
+		t.Fatalf("export mixed output path is empty")
+	}
 	if strings.TrimSpace(exportFinal.Outputs.NoWatermarkDualPDFPath) == "" &&
 		strings.TrimSpace(exportFinal.Outputs.DualPDFPath) == "" {
 		t.Fatalf("export dual output path is empty")
@@ -192,10 +196,10 @@ func cloneAppPathsForTest(t *testing.T, source appPaths) appPaths {
 
 	rootDir := workspaceTempDir(t, "manual-config-")
 	cloned := appPaths{
-		RootDir:           rootDir,
-		AppConfigDBPath:   filepath.Join(rootDir, "app_config.sqlite"),
-		OCRCacheDBPath:    filepath.Join(rootDir, "ocr_cache.sqlite"),
-		EncryptionKeyPath: filepath.Join(rootDir, "config.key"),
+		RootDir:                  rootDir,
+		AppConfigDBPath:          filepath.Join(rootDir, "app_config.sqlite"),
+		OCRCacheDBPath:           filepath.Join(rootDir, "ocr_cache.sqlite"),
+		EncryptionKeyPath:        filepath.Join(rootDir, "config.key"),
 		TranslateRootDir:         filepath.Join(rootDir, "reader_translate"),
 		TranslateJobsDir:         filepath.Join(rootDir, "reader_translate", "jobs"),
 		TranslateRuntimeRootDir:  filepath.Join(rootDir, "reader_translate", "runtime"),

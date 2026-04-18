@@ -46,8 +46,10 @@ type StartRequest struct {
 type JobOutputs struct {
 	OriginalPDFPath           string  `json:"originalPdfPath,omitempty"`
 	MonoPDFPath               string  `json:"monoPdfPath,omitempty"`
+	MixedPDFPath              string  `json:"mixedPdfPath,omitempty"`
 	DualPDFPath               string  `json:"dualPdfPath,omitempty"`
 	NoWatermarkMonoPDFPath    string  `json:"noWatermarkMonoPdfPath,omitempty"`
+	NoWatermarkMixedPDFPath   string  `json:"noWatermarkMixedPdfPath,omitempty"`
 	NoWatermarkDualPDFPath    string  `json:"noWatermarkDualPdfPath,omitempty"`
 	AutoExtractedGlossaryPath string  `json:"autoExtractedGlossaryPath,omitempty"`
 	TotalSeconds              float64 `json:"totalSeconds,omitempty"`

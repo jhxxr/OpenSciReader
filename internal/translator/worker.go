@@ -19,6 +19,7 @@ type workerRequest struct {
 	InputPDFPath              string         `json:"inputPdfPath"`
 	WorkingDir                string         `json:"workingDir"`
 	OutputDir                 string         `json:"outputDir"`
+	OutputFileStem            string         `json:"outputFileStem,omitempty"`
 	WorkerHomeDir             string         `json:"workerHomeDir,omitempty"`
 	SourceLang                string         `json:"sourceLang"`
 	TargetLang                string         `json:"targetLang"`
@@ -41,8 +42,10 @@ type workerRequest struct {
 type workerTranslateResult struct {
 	OriginalPDFPath           string  `json:"original_pdf_path"`
 	MonoPDFPath               string  `json:"mono_pdf_path"`
+	MixedPDFPath              string  `json:"mixed_pdf_path"`
 	DualPDFPath               string  `json:"dual_pdf_path"`
 	NoWatermarkMonoPDFPath    string  `json:"no_watermark_mono_pdf_path"`
+	NoWatermarkMixedPDFPath   string  `json:"no_watermark_mixed_pdf_path"`
 	NoWatermarkDualPDFPath    string  `json:"no_watermark_dual_pdf_path"`
 	AutoExtractedGlossaryPath string  `json:"auto_extracted_glossary_path"`
 	TotalSeconds              float64 `json:"total_seconds"`

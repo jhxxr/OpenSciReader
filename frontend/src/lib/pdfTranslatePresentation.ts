@@ -110,7 +110,7 @@ export function getJobSecondaryStatus(job: PDFTranslateJobSnapshot) {
   if (job.status === "completed") {
     return job.mode === "preview"
       ? "本次预览 chunk 已完成，右侧译文页会按块替换。"
-      : "整本导出已完成，可以直接下载 mono / dual PDF。";
+      : "整本导出已完成，可以直接下载译文 / 混排 / 对照 PDF。";
   }
   const stageLabel = getJobStageLabel(job.currentStage);
   const stageCurrent = job.stageCurrent ?? 0;

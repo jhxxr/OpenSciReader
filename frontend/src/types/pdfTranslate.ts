@@ -9,8 +9,10 @@ export type PDFTranslateJobStatus =
 export interface PDFTranslateJobOutputs {
   originalPdfPath?: string;
   monoPdfPath?: string;
+  mixedPdfPath?: string;
   dualPdfPath?: string;
   noWatermarkMonoPdfPath?: string;
+  noWatermarkMixedPdfPath?: string;
   noWatermarkDualPdfPath?: string;
   autoExtractedGlossaryPath?: string;
   totalSeconds?: number;

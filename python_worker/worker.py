@@ -193,6 +193,160 @@ def merge_pdf_files(paths: list[str], output_path: pathlib.Path) -> str:
     return str(output_path)
 
 
+def interleave_pdf_files(
+    original_pdf_path: str, translated_pdf_path: str, output_path: pathlib.Path
+) -> str:
+    import fitz
+
+    original_path = pathlib.Path(original_pdf_path).expanduser().resolve()
+    translated_path = pathlib.Path(translated_pdf_path).expanduser().resolve()
+    if not original_path.is_file():
+        raise FileNotFoundError(f"missing original pdf: {original_path}")
+    if not translated_path.is_file():
+        raise FileNotFoundError(f"missing translated pdf: {translated_path}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    original_doc = fitz.open(original_path)
+    translated_doc = fitz.open(translated_path)
+    merged_doc = fitz.open()
+    try:
+        total_pages = max(original_doc.page_count, translated_doc.page_count)
+        for page_index in range(total_pages):
+            if page_index < original_doc.page_count:
+                merged_doc.insert_pdf(
+                    original_doc, from_page=page_index, to_page=page_index
+                )
+            if page_index < translated_doc.page_count:
+                merged_doc.insert_pdf(
+                    translated_doc, from_page=page_index, to_page=page_index
+                )
+        merged_doc.save(
+            output_path,
+            garbage=3,
+            deflate=True,
+            use_objstms=1,
+        )
+    finally:
+        merged_doc.close()
+        translated_doc.close()
+        original_doc.close()
+    return str(output_path)
+
+
+def normalize_output_stem(value, fallback: str = "translated-document") -> str:
+    text = normalize_scalar(value) or ""
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r'[<>:"/\\\\|?*\x00-\x1f]+', "-", text)
+    text = re.sub(r"[^0-9A-Za-z\.\-_ \u0080-\uffff]+", "-", text)
+    text = re.sub(r"[- ]+", "-", text).strip(" .-_")
+    return text or fallback
+
+
+def normalized_path_text(value) -> str:
+    text = normalize_scalar(value) or ""
+    text = text.strip()
+    if not text:
+        return ""
+    try:
+        return str(pathlib.Path(text).expanduser().resolve())
+    except Exception:
+        return text
+
+
+def preferred_pdf_output_path(result: dict, *names: str) -> str:
+    for name in names:
+        path = normalize_scalar(result.get(name)) or ""
+        if str(path).strip():
+            return str(path).strip()
+    return ""
+
+
+def move_pdf_output(source_path: str, target_path: pathlib.Path) -> str:
+    source_text = normalized_path_text(source_path)
+    if not source_text:
+        return ""
+
+    source = pathlib.Path(source_text)
+    if not source.is_file():
+        return source_path
+
+    target = target_path.expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source == target:
+        return str(target)
+    if target.exists():
+        target.unlink()
+    source.replace(target)
+    return str(target)
+
+
+def rewrite_output_aliases(result: dict, source_path: str, target_path: str, *names: str) -> None:
+    source_key = normalized_path_text(source_path)
+    target_key = normalized_path_text(target_path)
+    if not source_key or not target_key:
+        return
+    for name in names:
+        current = normalized_path_text(result.get(name))
+        if current == source_key:
+            result[name] = target_path
+
+
+def finalize_export_translate_result(request: dict, result: dict) -> dict:
+    finalized = dict(result or {})
+    output_dir = pathlib.Path(request.get("outputDir", ".")).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_stem = normalize_output_stem(request.get("outputFileStem"))
+
+    mono_source_path = preferred_pdf_output_path(
+        finalized, "no_watermark_mono_pdf_path", "mono_pdf_path"
+    )
+    if mono_source_path:
+        named_mono_path = move_pdf_output(
+            mono_source_path, output_dir / f"{output_stem}.translated.pdf"
+        )
+        rewrite_output_aliases(
+            finalized,
+            mono_source_path,
+            named_mono_path,
+            "mono_pdf_path",
+            "no_watermark_mono_pdf_path",
+        )
+
+    dual_source_path = preferred_pdf_output_path(
+        finalized, "no_watermark_dual_pdf_path", "dual_pdf_path"
+    )
+    if dual_source_path:
+        named_dual_path = move_pdf_output(
+            dual_source_path, output_dir / f"{output_stem}.dual.pdf"
+        )
+        rewrite_output_aliases(
+            finalized,
+            dual_source_path,
+            named_dual_path,
+            "dual_pdf_path",
+            "no_watermark_dual_pdf_path",
+        )
+
+    original_pdf_path = preferred_pdf_output_path(finalized, "original_pdf_path") or (
+        normalize_scalar(request.get("inputPdfPath")) or ""
+    )
+    translated_pdf_path = preferred_pdf_output_path(
+        finalized, "no_watermark_mono_pdf_path", "mono_pdf_path"
+    )
+    if original_pdf_path and translated_pdf_path:
+        mixed_pdf_path = interleave_pdf_files(
+            original_pdf_path,
+            translated_pdf_path,
+            output_dir / f"{output_stem}.interleaved.pdf",
+        )
+        finalized["mixed_pdf_path"] = mixed_pdf_path
+        finalized["no_watermark_mixed_pdf_path"] = mixed_pdf_path
+
+    if not finalized.get("original_pdf_path"):
+        finalized["original_pdf_path"] = original_pdf_path
+    return finalized
+
+
 def normalize_translate_result(result) -> dict:
     if result is None:
         return {}
@@ -205,6 +359,10 @@ def normalize_translate_result(result) -> dict:
             get_field(result, "mono_pdf_path", "monoPdfPath")
         )
         or "",
+        "mixed_pdf_path": normalize_scalar(
+            get_field(result, "mixed_pdf_path", "mixedPdfPath")
+        )
+        or "",
         "dual_pdf_path": normalize_scalar(
             get_field(result, "dual_pdf_path", "dualPdfPath")
         )
@@ -214,6 +372,14 @@ def normalize_translate_result(result) -> dict:
                 result,
                 "no_watermark_mono_pdf_path",
                 "noWatermarkMonoPdfPath",
+            )
+        )
+        or "",
+        "no_watermark_mixed_pdf_path": normalize_scalar(
+            get_field(
+                result,
+                "no_watermark_mixed_pdf_path",
+                "noWatermarkMixedPdfPath",
             )
         )
         or "",
@@ -642,7 +808,43 @@ async def run_worker(request: dict) -> int:
 
     try:
         async for event in do_translate_async_stream(settings=settings, file=str(input_path)):
-            emit(normalize_event(event))
+            payload = normalize_event(event)
+            if payload.get("type") == "finish" and request.get("mode") == "export":
+                emit(
+                    {
+                        "type": "progress_start",
+                        "stage": "prepare export files",
+                        "stage_progress": 0.0,
+                        "overall_progress": 0.97,
+                        "stage_current": 0,
+                        "stage_total": 1,
+                    }
+                )
+                try:
+                    payload["translate_result"] = finalize_export_translate_result(
+                        request, payload.get("translate_result") or {}
+                    )
+                except Exception as exc:
+                    emit(
+                        {
+                            "type": "error",
+                            "error": f"prepare export files failed: {summarize_exception_message(exc)}",
+                            "error_type": exc.__class__.__name__,
+                            "details": traceback.format_exc(),
+                        }
+                    )
+                    return 1
+                emit(
+                    {
+                        "type": "progress_end",
+                        "stage": "prepare export files",
+                        "stage_progress": 1.0,
+                        "overall_progress": 1.0,
+                        "stage_current": 1,
+                        "stage_total": 1,
+                    }
+                )
+            emit(payload)
     except Exception as exc:
         emit(
             {
@@ -661,6 +863,11 @@ async def run_merge_worker(request: dict) -> int:
     dual_paths = request.get("mergeDualPdfPaths") or []
     output_dir = pathlib.Path(request.get("outputDir", ".")).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_stem = normalize_output_stem(request.get("outputFileStem"))
+    should_build_mixed = bool(mono_paths) and bool(request.get("inputPdfPath"))
+    stage_total = max(
+        int(bool(mono_paths)) + int(should_build_mixed) + int(bool(dual_paths)), 1
+    )
 
     emit(
         {
@@ -669,19 +876,19 @@ async def run_merge_worker(request: dict) -> int:
             "stage_progress": 0.0,
             "overall_progress": 0.05,
             "stage_current": 0,
-            "stage_total": max(int(bool(mono_paths)) + int(bool(dual_paths)), 1),
+            "stage_total": stage_total,
         }
     )
 
     started = time.perf_counter()
     try:
         mono_output_path = ""
+        mixed_output_path = ""
         dual_output_path = ""
-        stage_total = max(int(bool(mono_paths)) + int(bool(dual_paths)), 1)
         stage_current = 0
         if mono_paths:
             mono_output_path = merge_pdf_files(
-                mono_paths, output_dir / "output.preview_reuse.no_watermark.pdf"
+                mono_paths, output_dir / f"{output_stem}.translated.pdf"
             )
             stage_current += 1
             emit(
@@ -689,14 +896,31 @@ async def run_merge_worker(request: dict) -> int:
                     "type": "progress_update",
                     "stage": "merge preview outputs",
                     "stage_progress": stage_current / stage_total,
-                    "overall_progress": 0.4 if not dual_paths else 0.55,
+                    "overall_progress": 0.35,
+                    "stage_current": stage_current,
+                    "stage_total": stage_total,
+                }
+            )
+        if should_build_mixed and mono_output_path:
+            mixed_output_path = interleave_pdf_files(
+                request.get("inputPdfPath", ""),
+                mono_output_path,
+                output_dir / f"{output_stem}.interleaved.pdf",
+            )
+            stage_current += 1
+            emit(
+                {
+                    "type": "progress_update",
+                    "stage": "merge preview outputs",
+                    "stage_progress": stage_current / stage_total,
+                    "overall_progress": 0.7 if dual_paths else 0.95,
                     "stage_current": stage_current,
                     "stage_total": stage_total,
                 }
             )
         if dual_paths:
             dual_output_path = merge_pdf_files(
-                dual_paths, output_dir / "output.preview_reuse.dual.no_watermark.pdf"
+                dual_paths, output_dir / f"{output_stem}.dual.pdf"
             )
             stage_current += 1
             emit(
@@ -736,8 +960,10 @@ async def run_merge_worker(request: dict) -> int:
             "translate_result": {
                 "original_pdf_path": request.get("inputPdfPath", "") or "",
                 "mono_pdf_path": mono_output_path,
+                "mixed_pdf_path": mixed_output_path,
                 "dual_pdf_path": dual_output_path,
                 "no_watermark_mono_pdf_path": mono_output_path,
+                "no_watermark_mixed_pdf_path": mixed_output_path,
                 "no_watermark_dual_pdf_path": dual_output_path,
                 "auto_extracted_glossary_path": "",
                 "total_seconds": time.perf_counter() - started,

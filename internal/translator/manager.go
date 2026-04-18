@@ -541,6 +541,7 @@ func (m *Manager) runExportJob(ctx context.Context, job *jobRuntime, request Sta
 		return fmt.Errorf("create export work directory: %w", err)
 	}
 	workerHomeDir := m.sharedWorkerHomeDir(request)
+	outputFileStem := exportOutputFileStem(request)
 
 	if previewSnapshot, ok, err := m.loadReusablePreviewSnapshot(request); err != nil {
 		return err
@@ -560,6 +561,7 @@ func (m *Manager) runExportJob(ctx context.Context, job *jobRuntime, request Sta
 			InputPDFPath:      snapshot.LocalPDFPath,
 			WorkingDir:        workDir,
 			OutputDir:         workDir,
+			OutputFileStem:    outputFileStem,
 			WorkerHomeDir:     workerHomeDir,
 			MergeMonoPDFPaths: previewChunkPaths(previewSnapshot.Chunks, func(chunk ChunkStatus) string { return chunk.TranslatedPDFPath }),
 			MergeDualPDFPaths: previewChunkPaths(previewSnapshot.Chunks, func(chunk ChunkStatus) string { return chunk.DualPDFPath }),
@@ -597,6 +599,7 @@ func (m *Manager) runExportJob(ctx context.Context, job *jobRuntime, request Sta
 		InputPDFPath:        snapshot.LocalPDFPath,
 		WorkingDir:          workDir,
 		OutputDir:           workDir,
+		OutputFileStem:      outputFileStem,
 		WorkerHomeDir:       workerHomeDir,
 		SourceLang:          request.SourceLang,
 		TargetLang:          request.TargetLang,
@@ -868,8 +871,10 @@ func toJobOutputs(result workerTranslateResult) JobOutputs {
 	return JobOutputs{
 		OriginalPDFPath:           result.OriginalPDFPath,
 		MonoPDFPath:               result.MonoPDFPath,
+		MixedPDFPath:              result.MixedPDFPath,
 		DualPDFPath:               result.DualPDFPath,
 		NoWatermarkMonoPDFPath:    result.NoWatermarkMonoPDFPath,
+		NoWatermarkMixedPDFPath:   result.NoWatermarkMixedPDFPath,
 		NoWatermarkDualPDFPath:    result.NoWatermarkDualPDFPath,
 		AutoExtractedGlossaryPath: result.AutoExtractedGlossaryPath,
 		TotalSeconds:              result.TotalSeconds,

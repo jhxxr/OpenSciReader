@@ -44,7 +44,7 @@ export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
       try {
         const snapshots = await pdfTranslateApi.listJobs();
         if (!cancelled) {
-          setJobs(snapshots);
+          setJobs(filterHomeVisibleJobs(snapshots));
           setJobError(null);
         }
       } catch (error) {
@@ -79,7 +79,7 @@ export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
     setIsLoadingJobs(true);
     try {
       const snapshots = await pdfTranslateApi.listJobs();
-      setJobs(snapshots);
+      setJobs(filterHomeVisibleJobs(snapshots));
       setJobError(null);
     } catch (error) {
       setJobError(error instanceof Error ? error.message : '刷新翻译任务失败');
@@ -266,7 +266,7 @@ export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
             <div className="home-task-empty">
               <div className="feature-card-icon"><LoaderCircle size={22} /></div>
               <h3>暂无 PDF 翻译任务</h3>
-              <p>在阅读页启动保留格式翻译或整本导出后，这里会统一显示任务进度、使用模型和当前状态。</p>
+              <p>在阅读页启动保留格式翻译预览后，这里会统一显示预览任务进度、使用模型和当前状态。</p>
             </div>
           )}
           {jobError ? <div className="reader-error">{jobError}</div> : null}
@@ -309,4 +309,8 @@ function compareJobsByTime(a: PDFTranslateJobSnapshot, b: PDFTranslateJobSnapsho
   const parseSnapshotTime = (job: PDFTranslateJobSnapshot) =>
     Date.parse(job.updatedAt || job.finishedAt || job.startedAt || job.createdAt || '') || 0;
   return parseSnapshotTime(b) - parseSnapshotTime(a);
+}
+
+function filterHomeVisibleJobs(jobs: PDFTranslateJobSnapshot[]) {
+  return jobs.filter((job) => job.mode === 'preview');
 }

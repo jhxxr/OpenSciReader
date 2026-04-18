@@ -659,13 +659,13 @@ export function ReaderTab({
     }
   }
 
-  function handleDownloadPDF(path: string | undefined) {
+  function handleDownloadPDF(path: string | undefined, fileName?: string) {
     if (!path) {
       return;
     }
     const link = document.createElement("a");
     link.href = toReaderUrl(path);
-    link.download = "";
+    link.download = fileName || "";
     link.click();
   }
 
@@ -1093,7 +1093,8 @@ export function ReaderTab({
             <div className="context-card">
               <strong>整本导出</strong>
               <p>
-                导出模式会整本重新执行一次，产出 mono + dual PDF。大文件可通过 max-pages-per-part 自动切分。
+                导出模式会整本重新执行一次，产出译文版、原文译文混排版和对照版 PDF。大文件可通过
+                max-pages-per-part 自动切分。
               </p>
             </div>
             <label className="field">
@@ -1110,7 +1111,7 @@ export function ReaderTab({
                 onClick={() => void handleStartExportTranslation()}
                 disabled={isStartingExport || !tab.pdfPath || !readerPageCount || !llmProviderId || !llmModelId}
               >
-                {isStartingExport ? "导出启动中..." : "开始导出 mono + dual"}
+                {isStartingExport ? "导出启动中..." : "开始导出 PDF"}
               </Button>
               <Button
                 variant="secondary"
@@ -1168,22 +1169,54 @@ export function ReaderTab({
                     onClick={() =>
                       handleDownloadPDF(
                         exportJob.outputs.noWatermarkMonoPdfPath || exportJob.outputs.monoPdfPath,
+                        buildExportPDFDownloadName(
+                          exportJob.itemTitle || tab.title,
+                          exportJob.pdfPath || tab.pdfPath || undefined,
+                          exportJob.sourceLang,
+                          exportJob.targetLang,
+                          "translated",
+                        ),
                       )
                     }
                     disabled={!exportJob.outputs.noWatermarkMonoPdfPath && !exportJob.outputs.monoPdfPath}
                   >
-                    下载译文 PDF
+                    下载译文版 PDF
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      handleDownloadPDF(
+                        exportJob.outputs.noWatermarkMixedPdfPath || exportJob.outputs.mixedPdfPath,
+                        buildExportPDFDownloadName(
+                          exportJob.itemTitle || tab.title,
+                          exportJob.pdfPath || tab.pdfPath || undefined,
+                          exportJob.sourceLang,
+                          exportJob.targetLang,
+                          "interleaved",
+                        ),
+                      )
+                    }
+                    disabled={!exportJob.outputs.noWatermarkMixedPdfPath && !exportJob.outputs.mixedPdfPath}
+                  >
+                    下载混排版 PDF
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() =>
                       handleDownloadPDF(
                         exportJob.outputs.noWatermarkDualPdfPath || exportJob.outputs.dualPdfPath,
+                        buildExportPDFDownloadName(
+                          exportJob.itemTitle || tab.title,
+                          exportJob.pdfPath || tab.pdfPath || undefined,
+                          exportJob.sourceLang,
+                          exportJob.targetLang,
+                          "dual",
+                        ),
                       )
                     }
                     disabled={!exportJob.outputs.noWatermarkDualPdfPath && !exportJob.outputs.dualPdfPath}
                   >
-                    下载对照 PDF
+                    下载对照版 PDF
                   </Button>
                 </div>
                 <p className="empty-inline">{getJobLiveHint(exportJob)}</p>
@@ -1460,6 +1493,40 @@ function countOutlineItems(items: ReaderOutlineItem[]): number {
 
 function sanitizeFileName(input: string) {
   return input.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+}
+
+function buildExportPDFDownloadName(
+  title: string | undefined,
+  pdfPath: string | undefined,
+  sourceLang: string | undefined,
+  targetLang: string | undefined,
+  variant: "translated" | "interleaved" | "dual",
+) {
+  const baseName = sanitizeFileName(
+    (title || "").trim() || derivePDFBaseName(pdfPath) || "document",
+  );
+  const languageTag = sanitizeFileName(
+    [sourceLang, targetLang]
+      .map((value) => (value || "").trim())
+      .filter(Boolean)
+      .join("-to-"),
+  );
+  const suffix =
+    variant === "translated"
+      ? "translated"
+      : variant === "interleaved"
+        ? "interleaved"
+        : "dual";
+  return `${baseName}${languageTag ? `.${languageTag}` : ""}.${suffix}.pdf`;
+}
+
+function derivePDFBaseName(pdfPath: string | undefined) {
+  const normalized = (pdfPath || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const rawName = normalized.split(/[\\/]/).pop() || normalized;
+  return rawName.replace(/\.pdf$/i, "");
 }
 
 function downloadTextFile(filename: string, content: string) {
