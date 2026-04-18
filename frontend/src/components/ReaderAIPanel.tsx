@@ -730,11 +730,13 @@ ${item.summary}`,
           estimateTextBudget(contextWindow),
         );
         const pageSummary = context.truncated
-          ? `已注入 ${context.includedPages.length}/${context.totalPages} 页正文，约 ${context.text.length.toLocaleString()} 字符（已截断）`
-          : `已注入全文 ${context.totalPages} 页，约 ${context.totalCharacters.toLocaleString()} 字符`;
+          ? `${context.sourceLabel} · 已注入 ${context.includedPages.length}/${context.totalPages} 段正文，约 ${context.text.length.toLocaleString()} 字符（已截断）`
+          : `${context.sourceLabel} · 已注入全文 ${context.totalPages} 段，约 ${context.totalCharacters.toLocaleString()} 字符`;
 
         promptParts.push(
-          `下面是从 PDF 中按页提取的论文正文，请优先基于这部分信息回答：\n\n${context.text}`,
+          context.source === "markitdown"
+            ? `下面是从 PDF 中提取并结构化整理的论文 Markdown 内容，请优先基于其章节结构、列表和表格语义回答：\n\n${context.text}`
+            : `下面是从 PDF 中按页提取的论文正文，请优先基于这部分信息回答：\n\n${context.text}`,
         );
         resultMeta.push(pageSummary);
       } catch (error) {

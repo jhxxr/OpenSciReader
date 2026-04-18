@@ -13,8 +13,8 @@ import (
 )
 
 type configStore struct {
-	appDB   *sql.DB
 	ocrDB   *sql.DB
+	appDB   *sql.DB
 	secrets *secretManager
 }
 
@@ -40,7 +40,7 @@ func newConfigStore(paths appPaths) (*configStore, error) {
 		return nil, err
 	}
 
-	store := &configStore{appDB: appDB, ocrDB: ocrDB, secrets: secrets}
+	store := &configStore{ocrDB: ocrDB, appDB: appDB, secrets: secrets}
 	if err := store.bootstrap(); err != nil {
 		_ = appDB.Close()
 		_ = ocrDB.Close()
@@ -105,6 +105,15 @@ func (s *configStore) bootstrap() error {
 			setting_key TEXT PRIMARY KEY,
 			setting_value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS pdf_markdown_cache (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			pdf_hash TEXT NOT NULL,
+			extractor TEXT NOT NULL,
+			extractor_version TEXT NOT NULL,
+			json_data TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			UNIQUE(pdf_hash, extractor, extractor_version)
 		);`,
 	}
 
@@ -624,6 +633,62 @@ func (s *configStore) SaveOCRResult(ctx context.Context, result OCRPageResult) (
 	result.ID = id
 	result.CreatedAt = createdAt
 	return result, nil
+}
+
+type pdfMarkdownCacheRecord struct {
+	PDFHash          string
+	Extractor        string
+	ExtractorVersion string
+	Payload          PDFMarkdownPayload
+}
+
+func (s *configStore) GetPDFMarkdownCache(ctx context.Context, pdfHash, extractor, extractorVersion string) (PDFMarkdownPayload, bool, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT json_data
+		FROM pdf_markdown_cache
+		WHERE pdf_hash = ? AND extractor = ? AND extractor_version = ?
+		LIMIT 1;
+	`, strings.TrimSpace(pdfHash), strings.TrimSpace(extractor), strings.TrimSpace(extractorVersion))
+
+	var raw string
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PDFMarkdownPayload{}, false, nil
+		}
+		return PDFMarkdownPayload{}, false, fmt.Errorf("query pdf markdown cache: %w", err)
+	}
+
+	var payload PDFMarkdownPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return PDFMarkdownPayload{}, false, fmt.Errorf("decode pdf markdown cache: %w", err)
+	}
+	payload.Cached = true
+	return payload, true, nil
+}
+
+func (s *configStore) SavePDFMarkdownCache(ctx context.Context, record pdfMarkdownCacheRecord) (PDFMarkdownPayload, error) {
+	payload := record.Payload
+	payload.Cached = false
+	if strings.TrimSpace(payload.GeneratedAt) == "" {
+		payload.GeneratedAt = nowRFC3339()
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return PDFMarkdownPayload{}, fmt.Errorf("encode pdf markdown cache: %w", err)
+	}
+
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO pdf_markdown_cache (pdf_hash, extractor, extractor_version, json_data, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(pdf_hash, extractor, extractor_version) DO UPDATE SET
+			json_data = excluded.json_data,
+			created_at = excluded.created_at;
+	`, strings.TrimSpace(record.PDFHash), strings.TrimSpace(record.Extractor), strings.TrimSpace(record.ExtractorVersion), string(encoded), payload.GeneratedAt); err != nil {
+		return PDFMarkdownPayload{}, fmt.Errorf("save pdf markdown cache: %w", err)
+	}
+
+	return payload, nil
 }
 
 func (s *configStore) SaveChatHistory(ctx context.Context, entry ChatHistoryEntry) (ChatHistoryEntry, error) {

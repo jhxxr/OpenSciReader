@@ -22,18 +22,19 @@ func (g *gatewayService) FetchProviderModels(ctx context.Context, providerID int
 		return DiscoveredModelsResponse{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return DiscoveredModelsResponse{}, err
-	}
-	req.Header.Set("Accept", "application/json")
-	if useBearerAuth {
-		applyProviderRequestHeaders(req, provider.APIKey)
-	} else {
-		applyProviderRequestHeaders(req, "")
-	}
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Accept", "application/json")
+		if useBearerAuth {
+			applyProviderRequestHeaders(req, provider.APIKey)
+		} else {
+			applyProviderRequestHeaders(req, "")
+		}
+		return req, nil
+	})
 	if err != nil {
 		return DiscoveredModelsResponse{}, err
 	}

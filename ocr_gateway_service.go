@@ -86,14 +86,15 @@ func (g *gatewayService) doGLMOCRRequest(ctx context.Context, endpoint, apiKey s
 
 	var lastErr error
 	for index, authValue := range authCandidates {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", authValue)
-
-		resp, err := g.client.Do(req)
+		resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", authValue)
+			return req, nil
+		})
 		if err != nil {
 			return nil, err
 		}

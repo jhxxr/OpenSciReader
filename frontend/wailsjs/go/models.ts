@@ -357,6 +357,73 @@ export namespace main {
 	        this.dataBase64 = source["dataBase64"];
 	    }
 	}
+	export class PDFMarkdownSection {
+	    index: number;
+	    title: string;
+	    level: number;
+	    startPage: number;
+	    endPage: number;
+	    text: string;
+	    characters: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PDFMarkdownSection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.title = source["title"];
+	        this.level = source["level"];
+	        this.startPage = source["startPage"];
+	        this.endPage = source["endPage"];
+	        this.text = source["text"];
+	        this.characters = source["characters"];
+	    }
+	}
+	export class PDFMarkdownPayload {
+	    pdfPath: string;
+	    source: string;
+	    markdown: string;
+	    sections: PDFMarkdownSection[];
+	    totalChars: number;
+	    cached: boolean;
+	    generatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PDFMarkdownPayload(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pdfPath = source["pdfPath"];
+	        this.source = source["source"];
+	        this.markdown = source["markdown"];
+	        this.sections = this.convertValues(source["sections"], PDFMarkdownSection);
+	        this.totalChars = source["totalChars"];
+	        this.cached = source["cached"];
+	        this.generatedAt = source["generatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	
 	export class PDFTranslateRuntimeImportResult {
 	    runtime: PDFTranslateRuntimeConfig;
@@ -558,8 +625,10 @@ export namespace translator {
 	export class JobOutputs {
 	    originalPdfPath?: string;
 	    monoPdfPath?: string;
+	    mixedPdfPath?: string;
 	    dualPdfPath?: string;
 	    noWatermarkMonoPdfPath?: string;
+	    noWatermarkMixedPdfPath?: string;
 	    noWatermarkDualPdfPath?: string;
 	    autoExtractedGlossaryPath?: string;
 	    totalSeconds?: number;
@@ -573,8 +642,10 @@ export namespace translator {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.originalPdfPath = source["originalPdfPath"];
 	        this.monoPdfPath = source["monoPdfPath"];
+	        this.mixedPdfPath = source["mixedPdfPath"];
 	        this.dualPdfPath = source["dualPdfPath"];
 	        this.noWatermarkMonoPdfPath = source["noWatermarkMonoPdfPath"];
+	        this.noWatermarkMixedPdfPath = source["noWatermarkMixedPdfPath"];
 	        this.noWatermarkDualPdfPath = source["noWatermarkDualPdfPath"];
 	        this.autoExtractedGlossaryPath = source["autoExtractedGlossaryPath"];
 	        this.totalSeconds = source["totalSeconds"];

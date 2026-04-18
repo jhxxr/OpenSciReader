@@ -1,7 +1,8 @@
-import type { PDFDocumentPayload } from '../types/pdf';
+import type { PDFDocumentPayload, PDFMarkdownPayload } from '../types/pdf';
 
 interface WailsPDFApp {
   LoadPDFDocument: (pdfPath: string) => Promise<PDFDocumentPayload>;
+  ExtractPDFMarkdown: (pdfPath: string) => Promise<PDFMarkdownPayload>;
 }
 
 function isWailsApp(value: unknown): value is { go: { main: { App: WailsPDFApp } } } {
@@ -22,5 +23,13 @@ export const pdfApi = {
       throw new Error('PDF desktop bridge is unavailable');
     }
     return app.LoadPDFDocument(pdfPath);
+  },
+
+  async extractPDFMarkdown(pdfPath: string): Promise<PDFMarkdownPayload> {
+    const app = getApp();
+    if (!app) {
+      throw new Error('PDF desktop bridge is unavailable');
+    }
+    return app.ExtractPDFMarkdown(pdfPath);
   },
 };

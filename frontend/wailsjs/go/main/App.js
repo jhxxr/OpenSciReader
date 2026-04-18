@@ -22,6 +22,10 @@ export function DeleteProvider(arg1) {
   return window['go']['main']['App']['DeleteProvider'](arg1);
 }
 
+export function ExtractPDFMarkdown(arg1) {
+  return window['go']['main']['App']['ExtractPDFMarkdown'](arg1);
+}
+
 export function FetchProviderModels(arg1) {
   return window['go']['main']['App']['FetchProviderModels'](arg1);
 }

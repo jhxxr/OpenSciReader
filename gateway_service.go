@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,14 +53,36 @@ type openAIChatRequest struct {
 type deepLXEndpointMode string
 
 const (
-	deepLXEndpointFree     deepLXEndpointMode = "free"
-	deepLXEndpointPro      deepLXEndpointMode = "pro"
-	deepLXEndpointOfficial deepLXEndpointMode = "official"
+	deepLXEndpointFree          deepLXEndpointMode = "free"
+	deepLXEndpointPro           deepLXEndpointMode = "pro"
+	deepLXEndpointOfficial      deepLXEndpointMode = "official"
+	gatewayHTTP429MaxRetryDelay                    = 5 * time.Second
+	gatewayHTTP429RetryCount                       = 2
 )
 
 type deepLXEndpoint struct {
 	URL  string
 	Mode deepLXEndpointMode
+}
+
+var gatewayHTTP429RetryDelays = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+}
+
+var gatewaySleepWithContext = func(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func newGatewayService(store *configStore) *gatewayService {
@@ -69,6 +92,68 @@ func newGatewayService(store *configStore) *gatewayService {
 			Timeout: 0,
 		},
 	}
+}
+
+func (g *gatewayService) doRequestWith429Retry(ctx context.Context, buildRequest func() (*http.Request, error)) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := buildRequest()
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= gatewayHTTP429RetryCount {
+			return resp, nil
+		}
+
+		delay := gatewayHTTP429RetryDelay(resp, attempt)
+		drainAndCloseResponse(resp)
+		if err := gatewaySleepWithContext(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func gatewayHTTP429RetryDelay(resp *http.Response, retryIndex int) time.Duration {
+	if resp != nil {
+		if delay, ok := parseRetryAfterDelay(resp.Header.Get("Retry-After")); ok && delay > 0 && delay <= gatewayHTTP429MaxRetryDelay {
+			return delay
+		}
+	}
+	if retryIndex >= 0 && retryIndex < len(gatewayHTTP429RetryDelays) {
+		return gatewayHTTP429RetryDelays[retryIndex]
+	}
+	return time.Duration(retryIndex+1) * time.Second
+}
+
+func parseRetryAfterDelay(value string) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.Atoi(trimmed); err == nil {
+		return time.Duration(seconds) * time.Second, true
+	}
+	retryAt, err := http.ParseTime(trimmed)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Until(retryAt)
+	if delay <= 0 {
+		return 0, false
+	}
+	return delay, true
+}
+
+func drainAndCloseResponse(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
 }
 
 func (g *gatewayService) StreamLLMChat(ctx context.Context, appCtx context.Context, providerID, modelID int64, prompt string, contextData GatewayContextData) (string, error) {
@@ -112,16 +197,16 @@ func (g *gatewayService) streamOpenAICompatible(appCtx context.Context, eventNam
 		return
 	}
 
-	req, err := http.NewRequestWithContext(appCtx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		emitGatewayEvent(appCtx, eventName, gatewayStreamEvent{RequestID: requestID, Type: "error", Error: err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	applyProviderRequestHeaders(req, provider.APIKey)
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(appCtx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(appCtx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		applyProviderRequestHeaders(req, provider.APIKey)
+		return req, nil
+	})
 	if err != nil {
 		emitGatewayEvent(appCtx, eventName, gatewayStreamEvent{RequestID: requestID, Type: "error", Error: err.Error()})
 		return
@@ -358,15 +443,18 @@ func (g *gatewayService) proxyDeepL(ctx context.Context, provider providerSecret
 		_ = writer.WriteField("source_lang", strings.ToUpper(sourceLang))
 	}
 	_ = writer.Close()
+	bodyBytes := append([]byte(nil), body.Bytes()...)
+	contentType := writer.FormDataContentType()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/translate", body)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+provider.APIKey)
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/translate", bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Authorization", "DeepL-Auth-Key "+provider.APIKey)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -442,16 +530,17 @@ func (g *gatewayService) proxyDeepLXBearer(ctx context.Context, endpointURL, tok
 			authToken = ""
 		}
 
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(requestBody))
-		if reqErr != nil {
-			return nil, nil, reqErr
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if authToken != "" {
-			req.Header.Set("Authorization", "Bearer "+authToken)
-		}
-
-		resp, respErr := g.client.Do(req)
+		resp, respErr := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(requestBody))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if authToken != "" {
+				req.Header.Set("Authorization", "Bearer "+authToken)
+			}
+			return req, nil
+		})
 		if respErr != nil {
 			return nil, nil, respErr
 		}
@@ -492,14 +581,15 @@ func (g *gatewayService) proxyDeepLXOfficial(ctx context.Context, endpointURL, t
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(requestBody))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+token)
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(requestBody))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "DeepL-Auth-Key "+token)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -567,13 +657,14 @@ func (g *gatewayService) generateGeminiFigure(ctx context.Context, provider prov
 	}
 
 	endpoint := fmt.Sprintf("%s/models/%s:generateContent?key=%s", baseURL, model.ModelID, provider.APIKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return FigureGenerationResult{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return FigureGenerationResult{}, err
 	}
@@ -603,13 +694,15 @@ func (g *gatewayService) proxyLLMTranslation(ctx context.Context, providerID, mo
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	applyProviderRequestHeaders(req, provider.APIKey)
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		applyProviderRequestHeaders(req, provider.APIKey)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -672,13 +765,15 @@ func (g *gatewayService) proxyLLMTranslationWithContext(
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	applyProviderRequestHeaders(req, provider.APIKey)
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		applyProviderRequestHeaders(req, provider.APIKey)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -817,13 +912,15 @@ func (g *gatewayService) proxyGoogleTranslation(ctx context.Context, provider pr
 	}
 	form.Set("format", "text")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsedURL.String(), strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := g.client.Do(req)
+	formBody := form.Encode()
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, parsedURL.String(), strings.NewReader(formBody))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -867,17 +964,18 @@ func (g *gatewayService) proxyMicrosoftTranslation(ctx context.Context, provider
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Ocp-Apim-Subscription-Key", provider.APIKey)
-	if region != "" {
-		req.Header.Set("Ocp-Apim-Subscription-Region", region)
-	}
-
-	resp, err := g.client.Do(req)
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Ocp-Apim-Subscription-Key", provider.APIKey)
+		if region != "" {
+			req.Header.Set("Ocp-Apim-Subscription-Region", region)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}

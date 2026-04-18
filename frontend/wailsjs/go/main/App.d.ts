@@ -13,6 +13,8 @@ export function DeletePDFTranslateJob(arg1:string):Promise<void>;
 
 export function DeleteProvider(arg1:number):Promise<void>;
 
+export function ExtractPDFMarkdown(arg1:string):Promise<main.PDFMarkdownPayload>;
+
 export function FetchProviderModels(arg1:number):Promise<main.DiscoveredModelsResponse>;
 
 export function GenerateResearchFigure(arg1:number,arg2:number,arg3:string,arg4:main.GatewayContextData):Promise<main.FigureGenerationResult>;

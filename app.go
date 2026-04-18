@@ -42,7 +42,7 @@ func (a *App) startup(ctx context.Context) {
 	a.store = store
 	a.zotero = newZoteroService()
 	a.gateway = newGatewayService(store)
-	a.pdf = newPDFService()
+	a.pdf = newPDFService(store)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
 }
 
@@ -144,6 +144,10 @@ func (a *App) ResolvePDFPath(itemID string) (string, error) {
 
 func (a *App) LoadPDFDocument(pdfPath string) (PDFDocumentPayload, error) {
 	return a.pdf.LoadDocument(a.ctx, pdfPath)
+}
+
+func (a *App) ExtractPDFMarkdown(pdfPath string) (PDFMarkdownPayload, error) {
+	return a.pdf.ExtractMarkdown(a.ctx, pdfPath)
 }
 
 func (a *App) StreamLLMChat(providerID, modelID int64, prompt string, contextData GatewayContextData) (string, error) {

@@ -1,38 +1,48 @@
-# OpenSciReader
+<div align="center">
+  <img src="assets/logo.png" width="128" alt="OpenSciReader Logo" style="border-radius: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" />
+  <h1>OpenSciReader</h1>
+  <p><h3>为科研打造的本地 AI PDF 阅读器 (Academic PDF Reader with AI)</h3></p>
+  <p><strong>Wails + React · 双栏对照 · 实时排版级翻译 · 沉浸式阅读体验</strong></p>
 
-OpenSciReader is a Wails desktop reader for local academic PDF workflows.
+  <div>
+    <img src="https://img.shields.io/badge/Wails-v2-red?logo=wails&logoColor=white" alt="Wails">
+    <img src="https://img.shields.io/badge/React-18-blue?logo=react" alt="React">
+    <img src="https://img.shields.io/badge/Go-1.21-00ADD8?logo=go&logoColor=white" alt="Go">
+    <img src="https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/Platform-Windows-lightgrey" alt="Platform">
+  </div>
+</div>
 
-This branch includes a local PDF layout-translation pipeline built around:
-- Go job orchestration
-- a private Python worker
-- `pdf2zh_next.high_level.do_translate_async_stream`
-- React page-by-page preview replacement
+---
 
-## What is implemented
+OpenSciReader is a modern, Wails-based desktop reader tailored for local academic PDF workflows, designed to provide a seamless reading, translation, and research experience.
 
-- Local PDF layout translation preview in the reader
-- Dual-column reading mode
-  - left: original PDF
-  - right: translated pages replaced chunk by chunk
-- Preview translation in 25-page chunks
-- Whole-book export mode that reruns translation and outputs mono + dual PDFs
-- Cancel support
-- Retry support by starting a new preview job with `retryJobId`
-- WebSocket event streaming for progress updates
-- Persisted job metadata and output file paths under the user config directory
+This branch includes a local PDF layout-translation pipeline built around Go job orchestration, a private Python worker (`pdf2zh_next.high_level.do_translate_async_stream`), and a React page-by-page preview replacement.
 
-## Runtime packaging
+## ✨ 核心特性 (Features)
 
-The PDF layout-translation feature still uses the existing Go orchestration + private Python worker contract, but the heavy pdf2zh/BabelDOC runtime is no longer shipped inside the main installer.
+- **🧠 本地排版级翻译 (Local PDF Layout Translation):** View translations while preserving the original layout.
+- **📖 双栏阅读模式 (Dual-column reading mode):** 
+  - Left column: Original PDF
+  - Right column: Translated pages replaced chunk by chunk.
+- **⚡ 分块加载预览 (Chunk-based Translation Preview):** Preview translations in 25-page chunks for optimized performance.
+- **📚 图书级导出 (Whole-book Export):** Reruns translation and outputs mono + dual-language PDFs.
+- **⚙️ 任务管理与实时通讯 (Real-time Job Management):** 
+  - Full support for canceling and retrying jobs (`retryJobId`).
+  - WebSocket event streaming for real-time progress updates.
+  - Persisted job metadata and output file paths under the user config directory.
+
+## 📦 运行时打包策略 (Runtime Packaging)
+
+The PDF layout-translation feature uses a Go orchestration pipeline + private Python worker contract, avoiding the issue of shipping heavy `pdf2zh/BabelDOC` runtimes inside the main installer.
 
 The Windows installer now includes only:
 - `python_worker/`
 - optional `runtime/webview2/windows-amd64/`
 
-Users import a standalone runtime package after installing the app.
+Users easily import a standalone runtime package after installing the app.
 
-Expected imported runtime layout inside the zip:
-
+**Expected imported runtime layout inside the zip:**
 ```text
 pdf2zh/
   manifest.json
@@ -41,280 +51,67 @@ pdf2zh/
     pythonXY._pth
   site-packages/
   offline_assets_*.zip
-  ...runtime files...
+  ...
 python_worker/
   worker.py
 ```
 
-At runtime, the app resolves translation assets in this order:
-1. installed runtime from user config storage
-2. development fallback worker under `<install-dir>/python_worker/worker.py`
-3. development fallback runtime under repo / executable `runtime/pdf2zh-next/...`
+At runtime, the app resolves translation assets in this priority:
+1. Installed runtime from user config storage.
+2. Development fallback worker under `<install-dir>/python_worker/worker.py`.
+3. Development fallback runtime under repo / executable `runtime/pdf2zh-next/...`.
 
-The app stores imported runtimes under the user config directory and validates the runtime before allowing translation jobs to start.
+## 🚀 快速开始 (Getting Started)
 
-## Start in development
-
-Prerequisites:
+### 环境依赖 (Prerequisites)
 - Go
 - Node.js / npm
 - Wails CLI
 
-Run:
-
+### 开发模式 (Start in development)
 ```bash
 wails dev
 ```
-
-Build frontend only:
-
+*(To build frontend only)*
 ```bash
 cd frontend
 npm run build
 ```
 
-## Package for Windows
+## 🛠 Windows 打包流程 (Package for Windows)
 
-1. Ensure `python_worker/worker.py` is present
+1. Ensure `python_worker/worker.py` is present.
 2. Build the slim installer:
-
 ```bash
 wails build --target windows/amd64 --nsis
 ```
+*(The heavy pdf2zh runtime is published as a separate release asset, significantly reducing the installer bloat.)*
 
-The installer script now copies:
-- `python_worker`
-- optional `runtime/webview2/windows-amd64`
+## 🔄 CI 发布流程 (GitHub Actions Release)
 
-The heavy pdf2zh runtime is published as a separate release asset and is no longer embedded into the installer.
+The workflow (`.github/workflows/release-windows.yml`) automates two release assets:
+- **Slim installer:** `OpenSciReader-<version>-windows-amd64-installer.exe`
+- **Standalone runtime:** `OpenSciReader-pdf-runtime-windows-amd64-<version>.zip`
 
-## GitHub Actions release packaging
+The runtime package is assembled in CI from the pinned stack (embeddable CPython archive, `pdf2zh-next`, `onnxruntime-directml`, generated assets).
 
-The repository includes a Windows release workflow at:
-- `.github/workflows/release-windows.yml`
+## 📖 阅读器工作流 (Reader Workflow)
 
-The workflow now produces two release assets:
-- slim installer: `OpenSciReader-<version>-windows-amd64-installer.exe`
-- standalone runtime: `OpenSciReader-pdf-runtime-windows-amd64-<version>.zip`
+1. Install **OpenSciReader**.
+2. Open settings and import the standalone runtime: `OpenSciReader-pdf-runtime-windows-amd64-<version>.zip`.
+3. Open a PDF in the reader.
+4. Go to the `翻译` (Translate) tab.
+5. Select an LLM provider and model for layout translation.
+6. Click `开始保留格式翻译预览` (Start formatting-preserved translation preview).
+7. View translations on the right column chunk by chunk!
+8. Select `开始导出 mono + dual` (Export) and download translated/dual PDFs anytime.
 
-The runtime package is assembled in CI from the pinned stack:
-- embeddable CPython archive
-- `pdf2zh-next` / `BabelDOC` / `PyMuPDF`
-- `onnxruntime-directml`
-- generated `offline_assets_*.zip`
-- generated `manifest.json`
+## 🔌 后端 API 参考 (Backend API)
 
-The workflow will:
-- assemble and prune the runtime
-- validate the worker import path against the packaged runtime
-- zip the runtime as a separate release asset
-- build the NSIS installer without embedding the heavy runtime
-- optionally bundle the offline WebView2 installer
-- publish both assets to the GitHub Release in the same run
-
-## Reader workflow
-
-1. Install OpenSciReader
-2. Open settings and import `OpenSciReader-pdf-runtime-windows-amd64-<version>.zip`
-3. Open a PDF in the reader
-4. Go to the `翻译` tab
-5. Select the existing LLM provider + model used for layout translation
-6. Click `开始保留格式翻译预览`
-7. After the first 25-page chunk finishes, the right column replaces those pages with translated output
-8. Optionally start `开始导出 mono + dual`
-9. Download the translated-only PDF or the dual PDF from the export section
-
-## Backend API
-
-These endpoints are served by the app-local HTTP handler:
-
+Endpoints served by the app-local HTTP handler:
 - `POST /api/pdf-translate/start`
 - `POST /api/pdf-translate/{jobId}/cancel`
 - `GET /api/pdf-translate/{jobId}/status`
 - `WS /api/pdf-translate/{jobId}/events`
 
-### `POST /api/pdf-translate/start`
-
-Request:
-
-```json
-{
-  "pdfPath": "E:/papers/demo.pdf",
-  "pageCount": 86,
-  "itemId": "zotero-item-id",
-  "itemTitle": "Demo Paper",
-  "sourceLang": "en",
-  "targetLang": "zh-CN",
-  "mode": "preview",
-  "previewChunkPages": 25,
-  "maxPagesPerPart": 120,
-  "retryJobId": "",
-  "llmProviderId": 1,
-  "llmModelId": 2
-}
-```
-
-Response: `PDFTranslateJobSnapshot`
-
-### `GET /api/pdf-translate/{jobId}/status`
-
-Response shape:
-
-```json
-{
-  "jobId": "uuid",
-  "mode": "preview",
-  "status": "running",
-  "pdfPath": "E:/papers/demo.pdf",
-  "localPdfPath": "E:/papers/demo.pdf",
-  "pageCount": 86,
-  "sourceLang": "en",
-  "targetLang": "zh-CN",
-  "providerId": 1,
-  "providerName": "OpenAI Compatible",
-  "modelId": "gpt-4.1",
-  "currentStage": "translate",
-  "overallProgress": 0.42,
-  "outputs": {
-    "monoPdfPath": "",
-    "dualPdfPath": ""
-  },
-  "chunks": [
-    {
-      "index": 1,
-      "startPage": 1,
-      "endPage": 25,
-      "status": "completed",
-      "translatedPdfPath": "C:/Users/.../preview-chunk-001/output.no_watermark.pdf"
-    }
-  ]
-}
-```
-
-## Event protocol
-
-WebSocket messages are JSON objects shaped like `PDFTranslateEvent`.
-
-Common event types:
-- `status_snapshot`
-- `job_started`
-- `chunk_started`
-- `stage_summary`
-- `progress_start`
-- `progress_update`
-- `progress_end`
-- `chunk_finished`
-- `finish`
-- `cancelled`
-- `error`
-
-Example progress event:
-
-```json
-{
-  "sequence": 7,
-  "jobId": "uuid",
-  "mode": "preview",
-  "type": "progress_update",
-  "timestamp": "2026-04-17T10:00:00Z",
-  "jobStatus": "running",
-  "stage": "translate",
-  "stageProgress": 0.56,
-  "overallProgress": 0.31,
-  "stageCurrent": 14,
-  "stageTotal": 25,
-  "chunk": {
-    "index": 1,
-    "startPage": 1,
-    "endPage": 25,
-    "status": "running"
-  }
-}
-```
-
-Example finish event:
-
-```json
-{
-  "sequence": 19,
-  "jobId": "uuid",
-  "mode": "export",
-  "type": "finish",
-  "timestamp": "2026-04-17T10:03:21Z",
-  "jobStatus": "completed",
-  "output": {
-    "monoPdfPath": "C:/Users/.../mono.pdf",
-    "dualPdfPath": "C:/Users/.../dual.pdf",
-    "totalSeconds": 201.6
-  }
-}
-```
-
-## Python worker contract
-
-Worker file:
-- [python_worker/worker.py](/E:/0JHX/Project/OpenSciReader/python_worker/worker.py)
-
-Input:
-- reads one JSON request from `stdin`
-
-Output:
-- writes one JSON event per line to `stdout`
-
-Behavior:
-- imports `pdf2zh_next.high_level.do_translate_async_stream`
-- builds settings dynamically for compatibility with different upstream layouts
-- forwards `stage_summary / progress_* / finish / error`
-- normalizes `finish.translate_result` into plain JSON
-
-Normalized output fields:
-- `original_pdf_path`
-- `mono_pdf_path`
-- `dual_pdf_path`
-- `no_watermark_mono_pdf_path`
-- `no_watermark_dual_pdf_path`
-- `auto_extracted_glossary_path`
-- `total_seconds`
-- `peak_memory_usage`
-
-## Directory structure
-
-```text
-OpenSciReader/
-  frontend/
-    src/
-      api/
-        pdfTranslate.ts
-      components/
-        DualPdfReader.tsx
-        ReaderTab.tsx
-      types/
-        pdfTranslate.ts
-  internal/
-    translator/
-      manager.go
-      storage.go
-      types.go
-      worker.go
-  python_worker/
-    worker.py
-  runtime/
-    pdf2zh-next/
-      windows-amd64/
-        README.md
-  build/windows/installer/
-    project.nsi
-  pdf_translate_http.go
-  pdf_translate_runtime.go
-```
-
-## Notes
-
-- Preview mode uses:
-  - `pages`
-  - `only_include_translated_page=true`
-  - `no_dual=true`
-  - `no_mono=false`
-- Export mode reruns the whole document and returns mono + dual output paths
-- The current implementation persists job metadata to:
-  - `%AppData%/.openscireader/reader_translate/jobs/<jobId>/job.json`
+*(Please refer to the source directory for detailed JSON payloads and WebSocket event protocols: `internal/translator`, `pdf_translate_http.go`.)*

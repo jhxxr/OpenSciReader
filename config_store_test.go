@@ -164,6 +164,59 @@ func TestAIWorkspaceConfigPersistence(t *testing.T) {
 	}
 }
 
+func TestPDFMarkdownCacheRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	store, err := newConfigStore(appPaths{
+		RootDir:           tempDir,
+		AppConfigDBPath:   tempDir + "/app.sqlite",
+		OCRCacheDBPath:    tempDir + "/ocr.sqlite",
+		EncryptionKeyPath: tempDir + "/config.key",
+	})
+	if err != nil {
+		t.Fatalf("newConfigStore error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	payload, err := store.SavePDFMarkdownCache(t.Context(), pdfMarkdownCacheRecord{
+		PDFHash:          "hash-1",
+		Extractor:        pdfMarkdownExtractorName,
+		ExtractorVersion: pdfMarkdownExtractorVersion,
+		Payload: PDFMarkdownPayload{
+			PDFPath:     "C:/paper.pdf",
+			Source:      pdfMarkdownExtractorName,
+			Markdown:    "# Title\n\nHello world",
+			Sections:    []PDFMarkdownSection{{Index: 1, Title: "Title", Level: 1, Text: "# Title\n\nHello world", Characters: len("# Title\n\nHello world")}},
+			TotalChars:  len("# Title\n\nHello world"),
+			GeneratedAt: nowRFC3339(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SavePDFMarkdownCache error: %v", err)
+	}
+	if payload.Cached {
+		t.Fatalf("saved payload Cached = true, want false")
+	}
+
+	cached, found, err := store.GetPDFMarkdownCache(t.Context(), "hash-1", pdfMarkdownExtractorName, pdfMarkdownExtractorVersion)
+	if err != nil {
+		t.Fatalf("GetPDFMarkdownCache error: %v", err)
+	}
+	if !found {
+		t.Fatalf("GetPDFMarkdownCache found = false, want true")
+	}
+	if !cached.Cached {
+		t.Fatalf("cached payload Cached = false, want true")
+	}
+	if cached.Markdown != "# Title\n\nHello world" {
+		t.Fatalf("cached Markdown = %q, want original", cached.Markdown)
+	}
+	if len(cached.Sections) != 1 {
+		t.Fatalf("cached Sections len = %d, want 1", len(cached.Sections))
+	}
+}
+
 func TestBootstrapPurgesDeprecatedOCRProviders(t *testing.T) {
 	t.Parallel()
 
