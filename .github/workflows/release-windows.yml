@@ -1,0 +1,582 @@
+name: release-windows
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      python_embed_url:
+        description: "Optional override for the bundled embeddable Python archive URL"
+        required: false
+        type: string
+      webview2_installer_url:
+        description: "Optional override for the offline WebView2 installer URL"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-installer:
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'main' && github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, '[skip ci]'))
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NODE_VERSION: "20"
+      WAILS_VERSION: "v2.12.0"
+      PDF2ZH_RUNTIME_PYTHON_VERSION: "3.12.10"
+      PDF2ZH_RUNTIME_PDF2ZH_NEXT_VERSION: "2.8.2"
+      PDF2ZH_RUNTIME_BABELDOC_VERSION: "0.5.23"
+      PDF2ZH_RUNTIME_PYMUPDF_VERSION: "1.25.2"
+      PDF2ZH_RUNTIME_ONNXRUNTIME_DIRECTML_VERSION: "1.23.0"
+      PDF2ZH_RUNTIME_DEST: "runtime\\pdf2zh-next\\windows-amd64\\_upstream_extract\\pdf2zh"
+      PDF2ZH_RUNTIME_ARTIFACT_NAME: "OpenSciReader-pdf-runtime-windows-amd64"
+      WEBVIEW2_RUNTIME_DEST: "runtime\\webview2\\windows-amd64"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python for bundled runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PDF2ZH_RUNTIME_PYTHON_VERSION }}
+
+      - name: Install build tools
+        run: |
+          choco install nsis -y --no-progress
+          go install github.com/wailsapp/wails/v2/cmd/wails@${env:WAILS_VERSION}
+
+          $nsisExe = $null
+          foreach ($candidate in @(
+            "C:\Program Files (x86)\NSIS\makensis.exe",
+            "C:\Program Files\NSIS\makensis.exe"
+          )) {
+            if (Test-Path $candidate) {
+              $nsisExe = $candidate
+              break
+            }
+          }
+          if (-not $nsisExe) {
+            $command = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($command) {
+              $nsisExe = $command.Source
+            }
+          }
+          if (-not $nsisExe) {
+            throw "makensis.exe was not found after installing NSIS."
+          }
+
+          Split-Path -Path $nsisExe -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Resolve external asset URLs
+        id: asset_urls
+        run: |
+          $pythonEmbedUrl = '${{ inputs.python_embed_url }}'
+          if (-not $pythonEmbedUrl) {
+            $pythonVersion = '${{ env.PDF2ZH_RUNTIME_PYTHON_VERSION }}'
+            $pythonEmbedUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+          }
+
+          $webview2Url = '${{ inputs.webview2_installer_url }}'
+          if (-not $webview2Url) {
+            $webview2Url = '${{ vars.WEBVIEW2_OFFLINE_INSTALLER_URL }}'
+          }
+
+          if (-not $webview2Url -and -not (Test-Path "${env:WEBVIEW2_RUNTIME_DEST}\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe")) {
+            Write-Host "::notice title=Offline WebView2 Installer Missing::No offline WebView2 installer was found in the checkout and no installer URL was provided. The installer will fall back to the standard WebView2 bootstrapper."
+          }
+
+          "python_embed_url=$pythonEmbedUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "webview2_url=$webview2Url" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Resolve release metadata
+        id: release_meta
+        run: |
+          $refType = '${{ github.ref_type }}'
+          $refName = '${{ github.ref_name }}'
+          $eventName = '${{ github.event_name }}'
+
+          function Parse-Version([string]$value) {
+            if (-not $value -or $value -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+              throw "Version must be SemVer in the form X.Y.Z. Received: $value"
+            }
+
+            [pscustomobject]@{
+              Major = [int]$Matches[1]
+              Minor = [int]$Matches[2]
+              Patch = [int]$Matches[3]
+            }
+          }
+
+          function Compare-Version($left, $right) {
+            foreach ($field in @('Major', 'Minor', 'Patch')) {
+              if ($left.$field -gt $right.$field) {
+                return 1
+              }
+              if ($left.$field -lt $right.$field) {
+                return -1
+              }
+            }
+            return 0
+          }
+
+          function Format-Version($version) {
+            return '{0}.{1}.{2}' -f $version.Major, $version.Minor, $version.Patch
+          }
+
+          $config = Get-Content 'wails.json' -Raw | ConvertFrom-Json
+          if (-not $config.info) {
+            throw "wails.json must contain info.productVersion."
+          }
+
+          $configuredVersion = Parse-Version $config.info.productVersion
+
+          if ($refType -eq 'tag') {
+            $raw = $refName
+            if ($raw.StartsWith('v')) {
+              $raw = $raw.Substring(1)
+            }
+
+            $version = Format-Version (Parse-Version $raw)
+            $releaseTag = $refName
+            $releaseTitle = $refName
+            $prerelease = 'false'
+          } elseif ($eventName -eq 'push' -and $refType -eq 'branch' -and $refName -eq 'main') {
+            $tagVersions = @()
+            foreach ($tag in (git tag --list 'v*')) {
+              if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+                continue
+              }
+
+              $tagVersions += [pscustomobject]@{
+                Tag = $tag
+                Version = Parse-Version $Matches[1]
+              }
+            }
+
+            if ($tagVersions.Count -eq 0) {
+              $nextVersion = $configuredVersion
+            } else {
+              $latest = $tagVersions |
+                Sort-Object `
+                  @{ Expression = { $_.Version.Major } }, `
+                  @{ Expression = { $_.Version.Minor } }, `
+                  @{ Expression = { $_.Version.Patch } } |
+                Select-Object -Last 1
+
+              if ((Compare-Version $configuredVersion $latest.Version) -gt 0) {
+                $nextVersion = $configuredVersion
+              } else {
+                $nextVersion = [pscustomobject]@{
+                  Major = $latest.Version.Major
+                  Minor = $latest.Version.Minor
+                  Patch = $latest.Version.Patch + 1
+                }
+              }
+            }
+
+            $version = Format-Version $nextVersion
+            $releaseTag = "v$version"
+            $releaseTitle = $releaseTag
+            $prerelease = 'false'
+          } else {
+            $version = Format-Version $configuredVersion
+            $releaseTag = "manual-v$version-run${{ github.run_number }}"
+            $releaseTitle = $releaseTag
+            $prerelease = 'true'
+          }
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_title=$releaseTitle" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Inject build version metadata
+        env:
+          BUILD_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          $configPath = "wails.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+          if (-not $config.info) {
+            $config | Add-Member -MemberType NoteProperty -Name info -Value ([pscustomobject]@{})
+          }
+          if (-not $config.info.companyName) {
+            $config.info | Add-Member -MemberType NoteProperty -Name companyName -Value "OpenSciReader" -Force
+          }
+          if (-not $config.info.productName) {
+            $config.info | Add-Member -MemberType NoteProperty -Name productName -Value "OpenSciReader" -Force
+          }
+          if (-not $config.info.copyright) {
+            $config.info | Add-Member -MemberType NoteProperty -Name copyright -Value "Copyright OpenSciReader" -Force
+          }
+          if (-not $config.info.comments) {
+            $config.info | Add-Member -MemberType NoteProperty -Name comments -Value "OpenSciReader desktop application" -Force
+          }
+
+          $config.info.productVersion = $env:BUILD_VERSION
+          $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding utf8
+
+      - name: Assemble bundled pdf2zh runtime
+        env:
+          PYTHON_EMBED_URL: ${{ steps.asset_urls.outputs.python_embed_url }}
+        run: |
+          $workspaceRoot = [System.IO.Path]::GetFullPath((Get-Location).Path)
+          $runtimeRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot $env:PDF2ZH_RUNTIME_DEST))
+          $workspacePrefix = $workspaceRoot.TrimEnd('\') + '\'
+          if (-not $runtimeRoot.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Resolved runtime path escapes workspace: $runtimeRoot"
+          }
+
+          if (Test-Path $runtimeRoot) {
+            Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
+          }
+
+          $runtimePythonDir = Join-Path $runtimeRoot "runtime"
+          $runtimeSitePackagesDir = Join-Path $runtimeRoot "site-packages"
+          New-Item -ItemType Directory -Force -Path $runtimePythonDir, $runtimeSitePackagesDir | Out-Null
+
+          $embedArchivePath = Join-Path $env:RUNNER_TEMP "python-embed-amd64.zip"
+          Invoke-WebRequest -Uri $env:PYTHON_EMBED_URL -OutFile $embedArchivePath
+          Expand-Archive -Path $embedArchivePath -DestinationPath $runtimePythonDir -Force
+
+          $pthFile = Get-ChildItem -Path $runtimePythonDir -Filter "python*._pth" | Select-Object -First 1
+          if (-not $pthFile) {
+            throw "Unable to locate python*._pth in $runtimePythonDir"
+          }
+
+          $pthLines = Get-Content $pthFile.FullName
+          if ('..\site-packages' -notin $pthLines) {
+            $patchedPthLines = @()
+            foreach ($line in $pthLines) {
+              if ($line -match '^#\s*import site$') {
+                $patchedPthLines += '..\site-packages'
+              }
+              $patchedPthLines += $line
+            }
+            if ('..\site-packages' -notin $patchedPthLines) {
+              $patchedPthLines += '..\site-packages'
+            }
+            Set-Content -Path $pthFile.FullName -Value $patchedPthLines -Encoding ascii
+          }
+
+          python -m pip install --upgrade pip
+
+          $packages = @(
+            "pdf2zh-next==$env:PDF2ZH_RUNTIME_PDF2ZH_NEXT_VERSION",
+            "babeldoc==$env:PDF2ZH_RUNTIME_BABELDOC_VERSION",
+            "pymupdf==$env:PDF2ZH_RUNTIME_PYMUPDF_VERSION",
+            "onnxruntime-directml==$env:PDF2ZH_RUNTIME_ONNXRUNTIME_DIRECTML_VERSION"
+          )
+          Write-Host ("Installing bundled runtime packages: {0}" -f ($packages -join ", "))
+          python -m pip install --disable-pip-version-check --upgrade --target $runtimeSitePackagesDir @packages
+
+          $pruneDirs = @(
+            (Join-Path $runtimeSitePackagesDir "onnx\\backend\\test"),
+            (Join-Path $runtimeSitePackagesDir "onnx\\test")
+          )
+          foreach ($directory in $pruneDirs) {
+            if (Test-Path $directory) {
+              Remove-Item -LiteralPath $directory -Recurse -Force
+            }
+          }
+
+          Get-ChildItem -Path $runtimeSitePackagesDir -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "__pycache__" } |
+            Sort-Object { $_.FullName.Length } -Descending |
+            ForEach-Object {
+              if (Test-Path $_.FullName) {
+                Remove-Item -LiteralPath $_.FullName -Recurse -Force
+              }
+            }
+
+          Write-Host "Longest remaining bundled runtime paths:"
+          Get-ChildItem -Path $runtimeSitePackagesDir -Recurse -File -ErrorAction SilentlyContinue |
+            Sort-Object { $_.FullName.Length } -Descending |
+            Select-Object -First 20 @{Name='Len';Expression={$_.FullName.Length}}, FullName |
+            Format-Table -AutoSize
+
+          $embeddedPythonExe = Join-Path $runtimePythonDir "python.exe"
+          if (-not (Test-Path $embeddedPythonExe)) {
+            throw "Embedded python executable not found at $embeddedPythonExe"
+          }
+
+          Get-ChildItem -Path $runtimeRoot -Filter "offline_assets_*.zip" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+
+          $workerHome = Join-Path $env:RUNNER_TEMP "openscireader-runtime-build-home"
+          if (Test-Path $workerHome) {
+            Remove-Item -LiteralPath $workerHome -Recurse -Force
+          }
+          $appData = Join-Path $workerHome "AppData\\Roaming"
+          $localAppData = Join-Path $workerHome "AppData\\Local"
+          New-Item -ItemType Directory -Force -Path (Join-Path $workerHome ".cache\\babeldoc"), $appData, $localAppData | Out-Null
+
+          $env:OPENSCIREADER_PDF2ZH_RUNTIME_DIR = $runtimeRoot
+          $env:HOME = $workerHome
+          $env:USERPROFILE = $workerHome
+          $env:APPDATA = $appData
+          $env:LOCALAPPDATA = $localAppData
+          $env:PDF2ZH_RUNTIME_OUTPUT_DIR = $runtimeRoot
+
+          $pythonScript = @'
+          from pathlib import Path
+          import os
+
+          from babeldoc.assets.assets import generate_offline_assets_package
+
+          output_path = generate_offline_assets_package(Path(os.environ["PDF2ZH_RUNTIME_OUTPUT_DIR"]))
+          print(output_path)
+          '@
+
+          $pythonScript | & $embeddedPythonExe -
+
+          $offlineAssets = Get-ChildItem -Path $runtimeRoot -Filter "offline_assets_*.zip" -File -ErrorAction SilentlyContinue
+          if (-not $offlineAssets) {
+            throw "No offline assets package was generated under $runtimeRoot"
+          }
+
+      - name: Hydrate bundled WebView2 installer
+        env:
+          WEBVIEW2_URL: ${{ steps.asset_urls.outputs.webview2_url }}
+        run: |
+          $targetPath = Join-Path $env:WEBVIEW2_RUNTIME_DEST "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+          if (Test-Path $targetPath) {
+            Write-Host "Offline WebView2 installer already present."
+            exit 0
+          }
+
+          if (-not $env:WEBVIEW2_URL) {
+            Write-Host "::notice title=Skipping WebView2 Offline Installer Hydration::No offline installer URL was provided."
+            exit 0
+          }
+
+          New-Item -ItemType Directory -Force -Path $env:WEBVIEW2_RUNTIME_DEST | Out-Null
+          Invoke-WebRequest -Uri $env:WEBVIEW2_URL -OutFile $targetPath
+
+      - name: Validate bundled translation runtime
+        run: |
+          $pythonExe = Join-Path $env:PDF2ZH_RUNTIME_DEST "runtime\\python.exe"
+          if (-not (Test-Path $pythonExe)) {
+            throw "Bundled python runtime not found at $pythonExe."
+          }
+
+          $offlineAssets = Get-ChildItem -Path $env:PDF2ZH_RUNTIME_DEST -Filter "offline_assets_*.zip" -File -ErrorAction SilentlyContinue
+          if (-not $offlineAssets) {
+            throw "Bundled offline assets package not found under $env:PDF2ZH_RUNTIME_DEST."
+          }
+
+          $runtimeDir = (Resolve-Path $env:PDF2ZH_RUNTIME_DEST).Path
+
+          $workerHome = Join-Path $env:RUNNER_TEMP "openscireader-worker-home"
+          $appData = Join-Path $workerHome "AppData\\Roaming"
+          $localAppData = Join-Path $workerHome "AppData\\Local"
+          New-Item -ItemType Directory -Force -Path (Join-Path $workerHome ".cache\\babeldoc"), $appData, $localAppData | Out-Null
+
+          $env:OPENSCIREADER_PDF2ZH_RUNTIME_DIR = $runtimeDir
+          $env:HOME = $workerHome
+          $env:USERPROFILE = $workerHome
+          $env:APPDATA = $appData
+          $env:LOCALAPPDATA = $localAppData
+
+          $pythonScript = @(
+            'import pathlib'
+            'import sys'
+            ''
+            'sys.path.insert(0, str(pathlib.Path(".").resolve()))'
+            ''
+            'import python_worker.worker as worker'
+            ''
+            'worker.restore_bundled_offline_assets()'
+            ''
+            'import pdf2zh_next.high_level'
+            ''
+            'print("RUNTIME_OK")'
+          ) -join "`n"
+
+          $pythonScript | & $pythonExe -
+
+      - name: Package standalone translation runtime
+        env:
+          BUILD_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "pdf-runtime-package"
+          if (Test-Path $artifactRoot) {
+            Remove-Item -LiteralPath $artifactRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+
+          $runtimeRoot = Join-Path $artifactRoot "pdf2zh"
+          Copy-Item -LiteralPath $env:PDF2ZH_RUNTIME_DEST -Destination $runtimeRoot -Recurse -Force
+
+          $manifest = [ordered]@{
+            schemaVersion = "1"
+            runtimeId = "pdf2zh-next"
+            version = $env:BUILD_VERSION
+            platform = "windows-amd64"
+          } | ConvertTo-Json
+          Set-Content -Path (Join-Path $runtimeRoot "manifest.json") -Value $manifest -Encoding utf8
+
+          $releaseDir = "release"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $runtimeZip = Join-Path $releaseDir ("OpenSciReader-pdf-runtime-windows-amd64-{0}.zip" -f $env:BUILD_VERSION)
+          if (Test-Path $runtimeZip) {
+            Remove-Item -LiteralPath $runtimeZip -Force
+          }
+          Compress-Archive -Path (Join-Path $artifactRoot "*") -DestinationPath $runtimeZip -CompressionLevel Optimal
+
+      - name: Validate NSIS toolchain
+        run: |
+          $nsis = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $nsis) {
+            throw "makensis is not available on PATH."
+          }
+          Write-Host ("Using makensis: {0}" -f $nsis.Source)
+
+      - name: Build NSIS installer
+        run: |
+          $workspaceRoot = (Get-Location).Path
+          $shortDrive = $null
+          foreach ($candidate in @("R", "S", "T", "U", "V", "W")) {
+            if (-not (Get-PSDrive -Name $candidate -ErrorAction SilentlyContinue)) {
+              $shortDrive = "${candidate}:"
+              break
+            }
+          }
+          if (-not $shortDrive) {
+            throw "No spare drive letter available for short workspace mapping."
+          }
+
+          subst $shortDrive $workspaceRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to map $workspaceRoot to $shortDrive with subst."
+          }
+
+          $pushed = $false
+          try {
+            Push-Location ("{0}\" -f $shortDrive)
+            $pushed = $true
+            Write-Host ("Building from short workspace path: {0}" -f (Get-Location).Path)
+            wails build --clean -platform windows/amd64 --nsis
+          }
+          finally {
+            if ($pushed) {
+              Pop-Location
+            }
+            subst $shortDrive /d | Out-Null
+          }
+
+      - name: Stage release files
+        id: stage
+        env:
+          BUILD_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          $searchRoots = @(
+            (Join-Path (Get-Location) "build\\bin"),
+            (Join-Path (Get-Location) "bin"),
+            (Get-Location).Path
+          ) | Select-Object -Unique
+
+          $candidates = @()
+          foreach ($root in $searchRoots) {
+            if (-not (Test-Path $root)) {
+              continue
+            }
+            $candidates += Get-ChildItem -Path $root -Filter "OpenSciReader*-installer.exe" -File -Recurse -ErrorAction SilentlyContinue
+          }
+          $candidates = $candidates |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -Unique FullName, Name, LastWriteTime
+
+          if (-not $candidates) {
+            $searched = $searchRoots -join ", "
+            throw "Installer not found. Searched: $searched"
+          }
+          if ($candidates.Count -gt 1) {
+            Write-Host "Installer candidates:"
+            $candidates | ForEach-Object {
+              Write-Host (" - {0}" -f $_.FullName)
+            }
+          }
+          $installerPath = @($candidates)[0].FullName
+
+          $releaseDir = "release"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          $finalInstaller = Join-Path $releaseDir ("OpenSciReader-{0}-windows-amd64-installer.exe" -f $env:BUILD_VERSION)
+          Copy-Item $installerPath $finalInstaller -Force
+          Copy-Item "THIRD_PARTY_NOTICES.md" (Join-Path $releaseDir "THIRD_PARTY_NOTICES.md") -Force
+
+          $runtimeZip = Join-Path $releaseDir ("OpenSciReader-pdf-runtime-windows-amd64-{0}.zip" -f $env:BUILD_VERSION)
+          if (-not (Test-Path $runtimeZip)) {
+            throw "Runtime package not found at $runtimeZip"
+          }
+
+          "release_dir=$releaseDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "installer_path=$finalInstaller" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "runtime_zip_path=$runtimeZip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSciReader-windows-amd64-${{ steps.release_meta.outputs.version }}
+          path: ${{ steps.stage.outputs.release_dir }}\*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.release_meta.outputs.release_title }}
+          RELEASE_PRERELEASE: ${{ steps.release_meta.outputs.prerelease }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) {
+            throw "Tag name is required for release publishing."
+          }
+
+          $title = $env:RELEASE_TITLE
+          if (-not $title) {
+            $title = $tag
+          }
+
+          $files = Get-ChildItem "${{ steps.stage.outputs.release_dir }}" -File | Select-Object -ExpandProperty FullName
+          if (-not $files) {
+            throw "No release files were staged."
+          }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $files --clobber
+          } else {
+            if ($env:RELEASE_PRERELEASE -eq 'true') {
+              gh release create $tag $files --title $title --generate-notes --target "${{ github.sha }}" --prerelease
+            } else {
+              gh release create $tag $files --title $title --generate-notes --target "${{ github.sha }}"
+            }
+          }

@@ -1,0 +1,964 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+type configStore struct {
+	appDB   *sql.DB
+	ocrDB   *sql.DB
+	secrets *secretManager
+}
+
+type providerSecretRecord struct {
+	ProviderRecord
+	APIKey string
+}
+
+func newConfigStore(paths appPaths) (*configStore, error) {
+	secrets, err := newSecretManager(paths.EncryptionKeyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	appDB, err := openSQLite(paths.AppConfigDBPath)
+	if err != nil {
+		return nil, err
+	}
+
+	ocrDB, err := openSQLite(paths.OCRCacheDBPath)
+	if err != nil {
+		_ = appDB.Close()
+		return nil, err
+	}
+
+	store := &configStore{appDB: appDB, ocrDB: ocrDB, secrets: secrets}
+	if err := store.bootstrap(); err != nil {
+		_ = appDB.Close()
+		_ = ocrDB.Close()
+		return nil, err
+	}
+
+	return store, nil
+}
+
+func openSQLite(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database %s: %w", path, err)
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys for %s: %w", path, err)
+	}
+
+	return db, nil
+}
+
+func (s *configStore) bootstrap() error {
+	appSchema := []string{
+		`CREATE TABLE IF NOT EXISTS providers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			type TEXT NOT NULL,
+			base_url TEXT NOT NULL DEFAULT '',
+			region TEXT NOT NULL DEFAULT '',
+			api_key TEXT NOT NULL DEFAULT '',
+			is_active INTEGER NOT NULL DEFAULT 1
+		);`,
+		`CREATE TABLE IF NOT EXISTS models (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider_id INTEGER NOT NULL,
+			model_id TEXT NOT NULL,
+			context_window INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS ai_chat_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item_id TEXT NOT NULL,
+			item_title TEXT NOT NULL,
+			page INTEGER NOT NULL DEFAULT 1,
+			kind TEXT NOT NULL DEFAULT 'chat',
+			prompt TEXT NOT NULL,
+			response TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS reader_notes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item_id TEXT NOT NULL,
+			item_title TEXT NOT NULL,
+			page INTEGER NOT NULL DEFAULT 1,
+			anchor_text TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			setting_key TEXT PRIMARY KEY,
+			setting_value TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+	}
+
+	for _, stmt := range appSchema {
+		if _, err := s.appDB.Exec(stmt); err != nil {
+			return fmt.Errorf("bootstrap app config schema: %w", err)
+		}
+	}
+	if err := s.ensureProvidersRegionColumn(); err != nil {
+		return err
+	}
+	if err := s.migrateLegacyEncryptedProviderSecrets(); err != nil {
+		return err
+	}
+	if err := s.purgeDeprecatedOCRProviders(); err != nil {
+		return err
+	}
+
+	ocrSchema := `CREATE TABLE IF NOT EXISTS page_ocr_results (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		pdf_hash TEXT NOT NULL,
+		page_number INTEGER NOT NULL,
+		resolution INTEGER NOT NULL,
+		json_data TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);`
+
+	if _, err := s.ocrDB.Exec(ocrSchema); err != nil {
+		return fmt.Errorf("bootstrap ocr cache schema: %w", err)
+	}
+	if err := s.purgeDeprecatedOCRCache(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *configStore) migrateLegacyEncryptedProviderSecrets() error {
+	if s.secrets == nil {
+		return nil
+	}
+
+	rows, err := s.appDB.Query(`
+		SELECT id, api_key
+		FROM providers
+		WHERE api_key <> '';
+	`)
+	if err != nil {
+		return fmt.Errorf("list provider secrets for migration: %w", err)
+	}
+	defer rows.Close()
+
+	type migratedSecret struct {
+		id    int64
+		value string
+	}
+	var pending []migratedSecret
+	for rows.Next() {
+		var (
+			id    int64
+			value string
+		)
+		if err := rows.Scan(&id, &value); err != nil {
+			return fmt.Errorf("scan provider secret for migration: %w", err)
+		}
+		normalized, changed, err := s.secrets.NormalizeStoredSecret(value)
+		if err != nil {
+			return fmt.Errorf("normalize provider secret for migration: %w", err)
+		}
+		if changed {
+			pending = append(pending, migratedSecret{id: id, value: normalized})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate provider secrets for migration: %w", err)
+	}
+
+	for _, item := range pending {
+		if _, err := s.appDB.Exec(`
+			UPDATE providers
+			SET api_key = ?
+			WHERE id = ?;
+		`, item.value, item.id); err != nil {
+			return fmt.Errorf("migrate provider secret %d: %w", item.id, err)
+		}
+	}
+	return nil
+}
+
+func (s *configStore) Close() error {
+	var errs []error
+	if s.appDB != nil {
+		err := s.appDB.Close()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.ocrDB != nil {
+		err := s.ocrDB.Close()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *configStore) GetConfigSnapshot(ctx context.Context) (ConfigSnapshot, error) {
+	providerRows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, name, type, base_url, region, api_key, is_active
+		FROM providers
+		ORDER BY type, name, id;
+	`)
+	if err != nil {
+		return ConfigSnapshot{}, fmt.Errorf("list providers: %w", err)
+	}
+	defer providerRows.Close()
+
+	configs := make([]ProviderConfig, 0)
+	modelsByProvider := make(map[int64][]ModelRecord)
+
+	modelRows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, provider_id, model_id, context_window
+		FROM models
+		ORDER BY provider_id, model_id, id;
+	`)
+	if err != nil {
+		return ConfigSnapshot{}, fmt.Errorf("list models: %w", err)
+	}
+	defer modelRows.Close()
+
+	for modelRows.Next() {
+		var model ModelRecord
+		if err := modelRows.Scan(&model.ID, &model.ProviderID, &model.ModelID, &model.ContextWindow); err != nil {
+			return ConfigSnapshot{}, fmt.Errorf("scan model: %w", err)
+		}
+		modelsByProvider[model.ProviderID] = append(modelsByProvider[model.ProviderID], model)
+	}
+	if err := modelRows.Err(); err != nil {
+		return ConfigSnapshot{}, fmt.Errorf("iterate models: %w", err)
+	}
+
+	for providerRows.Next() {
+		var (
+			provider      ProviderRecord
+			providerType  string
+			region        string
+			encryptedKey  string
+			isActiveValue int
+		)
+
+		if err := providerRows.Scan(&provider.ID, &provider.Name, &providerType, &provider.BaseURL, &region, &encryptedKey, &isActiveValue); err != nil {
+			return ConfigSnapshot{}, fmt.Errorf("scan provider: %w", err)
+		}
+
+		provider.Type = ProviderType(providerType)
+		provider.Region = region
+		provider.HasAPIKey = encryptedKey != ""
+		provider.APIKeyMasked = maskAPIKey(provider.HasAPIKey)
+		provider.IsActive = isActiveValue == 1
+		if !isValidProviderType(provider.Type) {
+			continue
+		}
+		models := modelsByProvider[provider.ID]
+		if models == nil {
+			models = []ModelRecord{}
+		}
+
+		configs = append(configs, ProviderConfig{
+			Provider: provider,
+			Models:   models,
+		})
+	}
+
+	if err := providerRows.Err(); err != nil {
+		return ConfigSnapshot{}, fmt.Errorf("iterate providers: %w", err)
+	}
+
+	runtimeConfig, err := s.GetPDFTranslateRuntimeConfig(ctx)
+	if err != nil {
+		return ConfigSnapshot{}, fmt.Errorf("load pdf translate runtime config: %w", err)
+	}
+
+	return ConfigSnapshot{Providers: configs, PDFTranslateRuntime: runtimeConfig}, nil
+}
+
+func (s *configStore) SaveProvider(ctx context.Context, input ProviderUpsertInput) (ProviderRecord, error) {
+	name := strings.TrimSpace(input.Name)
+	baseURL := strings.TrimSpace(input.BaseURL)
+	region := strings.TrimSpace(input.Region)
+	if name == "" {
+		return ProviderRecord{}, fmt.Errorf("provider name is required")
+	}
+	if !isValidProviderType(input.Type) {
+		return ProviderRecord{}, fmt.Errorf("invalid provider type: %s", input.Type)
+	}
+
+	if input.ID == 0 {
+		return s.createProvider(ctx, ProviderUpsertInput{
+			Name:        name,
+			Type:        input.Type,
+			BaseURL:     baseURL,
+			Region:      region,
+			APIKey:      strings.TrimSpace(input.APIKey),
+			ClearAPIKey: input.ClearAPIKey,
+			IsActive:    input.IsActive,
+		})
+	}
+
+	return s.updateProvider(ctx, ProviderUpsertInput{
+		ID:          input.ID,
+		Name:        name,
+		Type:        input.Type,
+		BaseURL:     baseURL,
+		Region:      region,
+		APIKey:      strings.TrimSpace(input.APIKey),
+		ClearAPIKey: input.ClearAPIKey,
+		IsActive:    input.IsActive,
+	})
+}
+
+func (s *configStore) createProvider(ctx context.Context, input ProviderUpsertInput) (ProviderRecord, error) {
+	encryptedKey, err := s.secrets.EncryptString(input.APIKey)
+	if err != nil {
+		return ProviderRecord{}, err
+	}
+
+	result, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO providers (name, type, base_url, region, api_key, is_active)
+		VALUES (?, ?, ?, ?, ?, ?);
+	`, input.Name, string(input.Type), input.BaseURL, input.Region, encryptedKey, boolToInt(input.IsActive))
+	if err != nil {
+		return ProviderRecord{}, fmt.Errorf("create provider: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return ProviderRecord{}, fmt.Errorf("read provider id: %w", err)
+	}
+
+	return ProviderRecord{
+		ID:           id,
+		Name:         input.Name,
+		Type:         input.Type,
+		BaseURL:      input.BaseURL,
+		Region:       input.Region,
+		HasAPIKey:    encryptedKey != "",
+		APIKeyMasked: maskAPIKey(encryptedKey != ""),
+		IsActive:     input.IsActive,
+	}, nil
+}
+
+func (s *configStore) updateProvider(ctx context.Context, input ProviderUpsertInput) (ProviderRecord, error) {
+	var existingKey string
+	row := s.appDB.QueryRowContext(ctx, `SELECT api_key FROM providers WHERE id = ?;`, input.ID)
+	if err := row.Scan(&existingKey); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProviderRecord{}, fmt.Errorf("provider %d not found", input.ID)
+		}
+		return ProviderRecord{}, fmt.Errorf("load provider before update: %w", err)
+	}
+
+	finalKey := existingKey
+	if input.ClearAPIKey {
+		finalKey = ""
+	} else if input.APIKey != "" {
+		encryptedKey, err := s.secrets.EncryptString(input.APIKey)
+		if err != nil {
+			return ProviderRecord{}, err
+		}
+		finalKey = encryptedKey
+	}
+
+	result, err := s.appDB.ExecContext(ctx, `
+		UPDATE providers
+		SET name = ?, type = ?, base_url = ?, region = ?, api_key = ?, is_active = ?
+		WHERE id = ?;
+	`, input.Name, string(input.Type), input.BaseURL, input.Region, finalKey, boolToInt(input.IsActive), input.ID)
+	if err != nil {
+		return ProviderRecord{}, fmt.Errorf("update provider: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return ProviderRecord{}, fmt.Errorf("check provider update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ProviderRecord{}, fmt.Errorf("provider %d not found", input.ID)
+	}
+
+	return ProviderRecord{
+		ID:           input.ID,
+		Name:         input.Name,
+		Type:         input.Type,
+		BaseURL:      input.BaseURL,
+		Region:       input.Region,
+		HasAPIKey:    finalKey != "",
+		APIKeyMasked: maskAPIKey(finalKey != ""),
+		IsActive:     input.IsActive,
+	}, nil
+}
+
+func (s *configStore) DeleteProvider(ctx context.Context, id int64) error {
+	result, err := s.appDB.ExecContext(ctx, `DELETE FROM providers WHERE id = ?;`, id)
+	if err != nil {
+		return fmt.Errorf("delete provider: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check provider delete result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("provider %d not found", id)
+	}
+	return nil
+}
+
+func (s *configStore) SaveModel(ctx context.Context, input ModelUpsertInput) (ModelRecord, error) {
+	modelID := strings.TrimSpace(input.ModelID)
+	if input.ProviderID == 0 {
+		return ModelRecord{}, fmt.Errorf("provider id is required")
+	}
+	if modelID == "" {
+		return ModelRecord{}, fmt.Errorf("model id is required")
+	}
+	if input.ContextWindow < 0 {
+		return ModelRecord{}, fmt.Errorf("context window must be non-negative")
+	}
+
+	if err := s.ensureProviderExists(ctx, input.ProviderID); err != nil {
+		return ModelRecord{}, err
+	}
+
+	existingID, err := s.lookupModelID(ctx, input.ProviderID, modelID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ModelRecord{}, err
+	}
+	if err == nil && existingID != input.ID {
+		return ModelRecord{}, fmt.Errorf("model %s already exists for provider %d", modelID, input.ProviderID)
+	}
+
+	if input.ID == 0 {
+		result, err := s.appDB.ExecContext(ctx, `
+			INSERT INTO models (provider_id, model_id, context_window)
+			VALUES (?, ?, ?);
+		`, input.ProviderID, modelID, input.ContextWindow)
+		if err != nil {
+			return ModelRecord{}, fmt.Errorf("create model: %w", err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return ModelRecord{}, fmt.Errorf("read model id: %w", err)
+		}
+		return ModelRecord{ID: id, ProviderID: input.ProviderID, ModelID: modelID, ContextWindow: input.ContextWindow}, nil
+	}
+
+	result, err := s.appDB.ExecContext(ctx, `
+		UPDATE models
+		SET provider_id = ?, model_id = ?, context_window = ?
+		WHERE id = ?;
+	`, input.ProviderID, modelID, input.ContextWindow, input.ID)
+	if err != nil {
+		return ModelRecord{}, fmt.Errorf("update model: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return ModelRecord{}, fmt.Errorf("check model update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ModelRecord{}, fmt.Errorf("model %d not found", input.ID)
+	}
+
+	return ModelRecord{ID: input.ID, ProviderID: input.ProviderID, ModelID: modelID, ContextWindow: input.ContextWindow}, nil
+}
+
+func (s *configStore) DeleteModel(ctx context.Context, id int64) error {
+	result, err := s.appDB.ExecContext(ctx, `DELETE FROM models WHERE id = ?;`, id)
+	if err != nil {
+		return fmt.Errorf("delete model: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check model delete result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("model %d not found", id)
+	}
+	return nil
+}
+
+func (s *configStore) lookupModelID(ctx context.Context, providerID int64, modelID string) (int64, error) {
+	var id int64
+	err := s.appDB.QueryRowContext(ctx, `
+		SELECT id
+		FROM models
+		WHERE provider_id = ? AND model_id = ?
+		ORDER BY id
+		LIMIT 1;
+	`, providerID, modelID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, sql.ErrNoRows
+		}
+		return 0, fmt.Errorf("lookup model %s for provider %d: %w", modelID, providerID, err)
+	}
+	return id, nil
+}
+
+func (s *configStore) ensureProviderExists(ctx context.Context, id int64) error {
+	var exists int
+	err := s.appDB.QueryRowContext(ctx, `SELECT 1 FROM providers WHERE id = ?;`, id).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("provider %d not found", id)
+		}
+		return fmt.Errorf("check provider existence: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) GetProviderSecret(ctx context.Context, id int64) (providerSecretRecord, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT id, name, type, base_url, region, api_key, is_active
+		FROM providers
+		WHERE id = ?;
+	`, id)
+
+	var (
+		record       providerSecretRecord
+		providerType string
+		region       string
+		encryptedKey string
+		isActiveInt  int
+	)
+
+	if err := row.Scan(&record.ID, &record.Name, &providerType, &record.BaseURL, &region, &encryptedKey, &isActiveInt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return providerSecretRecord{}, fmt.Errorf("provider %d not found", id)
+		}
+		return providerSecretRecord{}, fmt.Errorf("load provider: %w", err)
+	}
+
+	record.Type = ProviderType(providerType)
+	record.Region = region
+	record.HasAPIKey = encryptedKey != ""
+	record.APIKeyMasked = maskAPIKey(record.HasAPIKey)
+	record.IsActive = isActiveInt == 1
+
+	decrypted, err := s.secrets.DecryptString(encryptedKey)
+	if err != nil {
+		return providerSecretRecord{}, fmt.Errorf("decrypt provider api key: %w", err)
+	}
+	record.APIKey = decrypted
+
+	return record, nil
+}
+
+func (s *configStore) GetModel(ctx context.Context, id int64) (ModelRecord, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT id, provider_id, model_id, context_window
+		FROM models
+		WHERE id = ?;
+	`, id)
+
+	var record ModelRecord
+	if err := row.Scan(&record.ID, &record.ProviderID, &record.ModelID, &record.ContextWindow); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ModelRecord{}, fmt.Errorf("model %d not found", id)
+		}
+		return ModelRecord{}, fmt.Errorf("load model: %w", err)
+	}
+
+	return record, nil
+}
+
+func (s *configStore) GetOCRResult(ctx context.Context, pdfHash string, pageNumber int) (OCRPageResult, error) {
+	row := s.ocrDB.QueryRowContext(ctx, `
+		SELECT id, pdf_hash, page_number, resolution, json_data, created_at
+		FROM page_ocr_results
+		WHERE pdf_hash = ? AND page_number = ?
+		ORDER BY id DESC
+		LIMIT 1;
+	`, strings.TrimSpace(pdfHash), pageNumber)
+
+	var (
+		result   OCRPageResult
+		jsonData string
+	)
+	if err := row.Scan(&result.ID, &result.PDFHash, &result.PageNumber, &result.Resolution, &jsonData, &result.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return OCRPageResult{}, fmt.Errorf("ocr cache miss")
+		}
+		return OCRPageResult{}, fmt.Errorf("load ocr cache: %w", err)
+	}
+	if err := json.Unmarshal([]byte(jsonData), &result.Blocks); err != nil {
+		return OCRPageResult{}, fmt.Errorf("decode ocr cache: %w", err)
+	}
+	return result, nil
+}
+
+func (s *configStore) SaveOCRResult(ctx context.Context, result OCRPageResult) (OCRPageResult, error) {
+	encoded, err := json.Marshal(result.Blocks)
+	if err != nil {
+		return OCRPageResult{}, fmt.Errorf("encode ocr cache: %w", err)
+	}
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	insertResult, err := s.ocrDB.ExecContext(ctx, `
+		INSERT INTO page_ocr_results (pdf_hash, page_number, resolution, json_data, created_at)
+		VALUES (?, ?, ?, ?, ?);
+	`, strings.TrimSpace(result.PDFHash), result.PageNumber, result.Resolution, string(encoded), createdAt)
+	if err != nil {
+		return OCRPageResult{}, fmt.Errorf("save ocr cache: %w", err)
+	}
+	id, err := insertResult.LastInsertId()
+	if err != nil {
+		return OCRPageResult{}, fmt.Errorf("read ocr cache id: %w", err)
+	}
+	result.ID = id
+	result.CreatedAt = createdAt
+	return result, nil
+}
+
+func (s *configStore) SaveChatHistory(ctx context.Context, entry ChatHistoryEntry) (ChatHistoryEntry, error) {
+	createdAt := nowRFC3339()
+	result, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO ai_chat_history (item_id, item_title, page, kind, prompt, response, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?);
+	`, strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.Kind), strings.TrimSpace(entry.Prompt), strings.TrimSpace(entry.Response), createdAt)
+	if err != nil {
+		return ChatHistoryEntry{}, fmt.Errorf("save chat history: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return ChatHistoryEntry{}, fmt.Errorf("read chat history id: %w", err)
+	}
+	entry.ID = id
+	entry.CreatedAt = createdAt
+	return entry, nil
+}
+
+func (s *configStore) ListChatHistory(ctx context.Context, itemID string) ([]ChatHistoryEntry, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, item_id, item_title, page, kind, prompt, response, created_at
+		FROM ai_chat_history
+		WHERE item_id = ?
+		ORDER BY id DESC;
+	`, strings.TrimSpace(itemID))
+	if err != nil {
+		return nil, fmt.Errorf("list chat history: %w", err)
+	}
+	defer rows.Close()
+
+	entries := []ChatHistoryEntry{}
+	for rows.Next() {
+		var entry ChatHistoryEntry
+		if err := rows.Scan(&entry.ID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.Kind, &entry.Prompt, &entry.Response, &entry.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan chat history: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate chat history: %w", err)
+	}
+	return entries, nil
+}
+
+func (s *configStore) DeleteChatHistory(ctx context.Context, id int64) error {
+	if _, err := s.appDB.ExecContext(ctx, `
+		DELETE FROM ai_chat_history
+		WHERE id = ?;
+	`, id); err != nil {
+		return fmt.Errorf("delete chat history: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) SaveReaderNote(ctx context.Context, entry ReaderNoteEntry) (ReaderNoteEntry, error) {
+	createdAt := nowRFC3339()
+	result, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO reader_notes (item_id, item_title, page, anchor_text, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?);
+	`, strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.AnchorText), strings.TrimSpace(entry.Content), createdAt)
+	if err != nil {
+		return ReaderNoteEntry{}, fmt.Errorf("save reader note: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return ReaderNoteEntry{}, fmt.Errorf("read reader note id: %w", err)
+	}
+	entry.ID = id
+	entry.CreatedAt = createdAt
+	return entry, nil
+}
+
+func (s *configStore) ListReaderNotes(ctx context.Context, itemID string) ([]ReaderNoteEntry, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, item_id, item_title, page, anchor_text, content, created_at
+		FROM reader_notes
+		WHERE item_id = ?
+		ORDER BY id DESC;
+	`, strings.TrimSpace(itemID))
+	if err != nil {
+		return nil, fmt.Errorf("list reader notes: %w", err)
+	}
+	defer rows.Close()
+
+	entries := []ReaderNoteEntry{}
+	for rows.Next() {
+		var entry ReaderNoteEntry
+		if err := rows.Scan(&entry.ID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.AnchorText, &entry.Content, &entry.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan reader note: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reader notes: %w", err)
+	}
+	return entries, nil
+}
+
+const (
+	aiWorkspaceConfigSettingKey      = "ai_workspace_config"
+	pdfTranslateRuntimeSettingKeyDB = pdfTranslateRuntimeSettingKey
+)
+
+func defaultAIWorkspaceConfig() AIWorkspaceConfig {
+	return AIWorkspaceConfig{
+		SummaryMode:          "auto",
+		SummaryChunkPages:    6,
+		SummaryChunkMaxChars: 18000,
+		AutoRestoreCount:     3,
+		TableTemplate: `| 维度 | 内容 |
+| --- | --- |
+| 论文标题 | |
+| 研究问题 | |
+| 核心方法 | |
+| 数据/实验设置 | |
+| 关键结果 | |
+| 创新点 | |
+| 局限性 | |
+| 我能直接借鉴什么 | |`,
+		TablePrompt:         "请仔细阅读当前论文，并严格按照给定的 Markdown 表格模板填写。要求：1. 只输出填好的表格。2. 所有单元格用中文填写。3. 若原文未明确提及，填写“未明确说明”。4. 内容应简洁但能支持快速比较论文。",
+		CustomPromptDraft:   "",
+		FollowUpPromptDraft: "",
+		DrawingPromptDraft:  "根据当前论文内容，生成一张适合组会汇报的科研概念图，突出问题、方法流程、关键结果和应用价值。",
+		DrawingProviderID:   0,
+		DrawingModel:        "gemini-3-pro-image-preview",
+	}
+}
+
+func normalizeAIWorkspaceConfig(input AIWorkspaceConfig) AIWorkspaceConfig {
+	config := defaultAIWorkspaceConfig()
+
+	switch strings.TrimSpace(input.SummaryMode) {
+	case "single", "multi":
+		config.SummaryMode = strings.TrimSpace(input.SummaryMode)
+	default:
+		config.SummaryMode = "auto"
+	}
+
+	if input.SummaryChunkPages >= 1 && input.SummaryChunkPages <= 30 {
+		config.SummaryChunkPages = input.SummaryChunkPages
+	}
+	if input.SummaryChunkMaxChars >= 4000 && input.SummaryChunkMaxChars <= 120000 {
+		config.SummaryChunkMaxChars = input.SummaryChunkMaxChars
+	}
+	if input.AutoRestoreCount >= 1 && input.AutoRestoreCount <= 12 {
+		config.AutoRestoreCount = input.AutoRestoreCount
+	}
+
+	if trimmed := strings.TrimSpace(input.TableTemplate); trimmed != "" {
+		config.TableTemplate = trimmed
+	}
+	if trimmed := strings.TrimSpace(input.TablePrompt); trimmed != "" {
+		config.TablePrompt = trimmed
+	}
+
+	config.CustomPromptDraft = input.CustomPromptDraft
+	config.FollowUpPromptDraft = input.FollowUpPromptDraft
+	if trimmed := strings.TrimSpace(input.DrawingPromptDraft); trimmed != "" {
+		config.DrawingPromptDraft = input.DrawingPromptDraft
+	}
+	if input.DrawingProviderID > 0 {
+		config.DrawingProviderID = input.DrawingProviderID
+	}
+	if trimmed := strings.TrimSpace(input.DrawingModel); trimmed != "" {
+		config.DrawingModel = trimmed
+	}
+
+	return config
+}
+
+func (s *configStore) GetAIWorkspaceConfig(ctx context.Context) (AIWorkspaceConfig, error) {
+	config := defaultAIWorkspaceConfig()
+
+	raw, found, err := s.getSettingValue(ctx, aiWorkspaceConfigSettingKey)
+	if err != nil {
+		return AIWorkspaceConfig{}, err
+	}
+	if !found {
+		return config, nil
+	}
+
+	var stored AIWorkspaceConfig
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return AIWorkspaceConfig{}, fmt.Errorf("decode ai workspace config: %w", err)
+	}
+	return normalizeAIWorkspaceConfig(stored), nil
+}
+
+func (s *configStore) SaveAIWorkspaceConfig(ctx context.Context, input AIWorkspaceConfig) (AIWorkspaceConfig, error) {
+	normalized := normalizeAIWorkspaceConfig(input)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return AIWorkspaceConfig{}, fmt.Errorf("encode ai workspace config: %w", err)
+	}
+
+	if err := s.saveSettingValue(ctx, aiWorkspaceConfigSettingKey, string(encoded)); err != nil {
+		return AIWorkspaceConfig{}, fmt.Errorf("save ai workspace config: %w", err)
+	}
+
+	return normalized, nil
+}
+
+func (s *configStore) GetPDFTranslateRuntimeConfig(ctx context.Context) (PDFTranslateRuntimeConfig, error) {
+	config := defaultMissingPDFTranslateRuntimeConfig()
+
+	raw, found, err := s.getSettingValue(ctx, pdfTranslateRuntimeSettingKeyDB)
+	if err != nil {
+		return PDFTranslateRuntimeConfig{}, err
+	}
+	if !found {
+		return validateStoredPDFTranslateRuntimeConfig(config), nil
+	}
+
+	var stored PDFTranslateRuntimeConfig
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return PDFTranslateRuntimeConfig{}, fmt.Errorf("decode pdf translate runtime config: %w", err)
+	}
+	return validateStoredPDFTranslateRuntimeConfig(stored), nil
+}
+
+func (s *configStore) SavePDFTranslateRuntimeConfig(ctx context.Context, input PDFTranslateRuntimeConfig) (PDFTranslateRuntimeConfig, error) {
+	normalized := validateStoredPDFTranslateRuntimeConfig(input)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return PDFTranslateRuntimeConfig{}, fmt.Errorf("encode pdf translate runtime config: %w", err)
+	}
+	if err := s.saveSettingValue(ctx, pdfTranslateRuntimeSettingKeyDB, string(encoded)); err != nil {
+		return PDFTranslateRuntimeConfig{}, fmt.Errorf("save pdf translate runtime config: %w", err)
+	}
+	return normalized, nil
+}
+
+func (s *configStore) ClearPDFTranslateRuntimeConfig(ctx context.Context) error {
+	if _, err := s.appDB.ExecContext(ctx, `DELETE FROM app_settings WHERE setting_key = ?;`, pdfTranslateRuntimeSettingKeyDB); err != nil {
+		return fmt.Errorf("clear pdf translate runtime config: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) saveSettingValue(ctx context.Context, key, value string) error {
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO app_settings (setting_key, setting_value, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(setting_key) DO UPDATE SET
+			setting_value = excluded.setting_value,
+			updated_at = excluded.updated_at;
+	`, strings.TrimSpace(key), value, nowRFC3339()); err != nil {
+		return fmt.Errorf("save app setting %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *configStore) getSettingValue(ctx context.Context, key string) (string, bool, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT setting_value
+		FROM app_settings
+		WHERE setting_key = ?;
+	`, strings.TrimSpace(key))
+
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("load app setting %s: %w", key, err)
+	}
+
+	return value, true, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func isValidProviderType(providerType ProviderType) bool {
+	switch providerType {
+	case ProviderTypeLLM, ProviderTypeDrawing, ProviderTypeTranslate:
+		return true
+	default:
+		return false
+	}
+}
+
+func nowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func (s *configStore) ensureProvidersRegionColumn() error {
+	rows, err := s.appDB.Query(`PRAGMA table_info(providers);`)
+	if err != nil {
+		return fmt.Errorf("inspect providers schema: %w", err)
+	}
+	defer rows.Close()
+
+	var (
+		cid        int
+		name       string
+		colType    string
+		notNull    int
+		defaultV   sql.NullString
+		primaryKey int
+	)
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primaryKey); err != nil {
+			return fmt.Errorf("scan providers schema: %w", err)
+		}
+		if strings.EqualFold(name, "region") {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate providers schema: %w", err)
+	}
+
+	if _, err := s.appDB.Exec(`ALTER TABLE providers ADD COLUMN region TEXT NOT NULL DEFAULT '';`); err != nil {
+		return fmt.Errorf("add providers.region column: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) purgeDeprecatedOCRProviders() error {
+	if _, err := s.appDB.Exec(`DELETE FROM providers WHERE type = ?;`, string(ProviderTypeOCR)); err != nil {
+		return fmt.Errorf("purge deprecated ocr providers: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) purgeDeprecatedOCRCache() error {
+	if _, err := s.ocrDB.Exec(`DELETE FROM page_ocr_results;`); err != nil {
+		return fmt.Errorf("purge deprecated ocr cache: %w", err)
+	}
+	return nil
+}

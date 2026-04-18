@@ -1,0 +1,57 @@
+0	HomePage.tsx | handleCancelJob() | handleDeleteJob() | handleOpenTaskPdf() | handleRefreshJobs() | loadJobs() | manager.go | manager_test.go
+1	GetConfigSnapshot() | SaveProvider() | .Close() | .GetModel() | .GetProviderSecret() | newConfigStore() | openSQLite() | encryptLegacyStringForTest()
+2	models.ts | AIWorkspaceConfig | .constructor() | .createFrom() | ChatHistoryEntry | .constructor() | .createFrom() | ChunkStatus
+3	runtime.js | BrowserOpenURL() | CanResolveFilePaths() | CheckNotificationAuthorization() | CleanupNotifications() | ClipboardGetText() | ClipboardSetText() | Environment()
+4	decryptLegacyString() | config_crypto.go | loadExistingKey() | maskAPIKey() | newSecretManager() | secretManager | .DecryptString() | .EncryptString()
+5	App | .DeleteChatHistory() | .DeleteModel() | .DeleteProvider() | .FetchProviderModels() | .GenerateResearchFigure() | .GetAIWorkspaceConfig() | .GetCollections()
+6	appendQuery() | buildCollectionChildren() | buildCollectionTree() | decodeFileURL() | defaultLibraryName() | extractYear() | fetchPaginatedJSON() | firstNonEmpty()
+7	app.go | NewApp() | StartPDFTranslate() | asset_local_handler.go | newLocalAssetHandler() | normalizeLocalPDFRequestPath() | serveLocalPDFFile() | serveRemotePDFFile()
+8	createProviderFromTemplate() | findMatchingProviderTemplate() | findModelPreset() | getProviderTemplatesByType() | getRecommendedModelsForProvider() | normalize() | suggestContextWindow() | .SaveModel()
+9	pdfDocument.ts | pdfFigures.ts | pdfSource.ts | pdfText.ts | destroyPDFDocument() | normalizePDFError() | openPDFDocument() | buildCaptionSideRect()
+10	handleCaptureEnd() | handleCaptureMove() | handleCaptureStart() | handleCaptureToggle() | handleMouseUp() | handleViewerKeyDown() | handleViewerScroll() | handleViewerWheel()
+11	.LoadPDFDocument() | .startup() | appPaths | config_paths.go | resolveAppPaths() | newGatewayService() | pdf_service.go | newPDFService()
+12	ReaderAIPanel.tsx | paperFigurePrompt.ts | pdfContext.ts | buildPaperImageGenerationPrompt() | buildPaperImageSummaryInstruction() | buildPaperImageSummaryPrompt() | loadAllPageTexts() | loadPDFTextChunks()
+13	worker.py | build_nested_payload() | build_settings() | emit() | find_settings_loader() | find_settings_model() | get_field() | get_model_annotation()
+14	ReaderTab.tsx | pdfUrl.ts | toReaderUrl() | bindPDFTranslateEvents() | buildPreviewStatusText() | closeSubscription() | compareTranslateJobsByTime() | defaultReaderUIState()
+15	Magnifying Glass | Open Book | OpenSciReader Logo | PDF Document | BabelDOC Offline Assets Package | Local PDF Layout Translation Pipeline | OpenSciReader | pdf2zh_next.high_level.do_translate_async_stream
+16	pdfTranslatePresentation.ts | getChunkCaption() | formatRelativeTimestamp() | getChunkCaption() | getChunkStatusLabel() | getJobLiveHint() | getJobPrimaryStatus() | getJobProgressPercent()
+17	extractDataURLPayload() | clampUnit() | decodeOCRImageSize() | gatewayService | .doGLMOCRRequest() | .runGLMOCRLayoutParsing() | glmOCREndpoint() | ocr_gateway_service.go
+18	buildProviderModelsEndpoint() | dedupeAndSortDiscoveredModels() | gatewayService | .FetchProviderModels() | provider_models_service.go | isGoogleModelDiscoveryProvider() | parseDiscoveredModels() | parseGoogleModels()
+19	pdfTranslate.ts | getWailsApp() | isWailsApp() | isWailsDesktop() | jobURL() | pdfTranslateRuntimeEventName() | readJSONResponse() | websocketOrigin()
+20	normalizeProviderConfig() | normalizeSnapshot() | upsertModel() | upsertProviderConfig() | useProviderConfigs() | useProvidersByType() | useSelectedProviderConfig() | configStore.ts
+21	Apache License 2.0 | bzip2 | Guido van Rossum | libffi | Microsoft Distributable Code | Python | Python Software Foundation License Version 2
+22	zotero.ts | createMockApp() | getApp() | getMockCollections() | getMockItems() | isWailsApp()
+23	Typst Design Principles Rationale | Incremental Compilation | LaTeX | NLnet | Typst | Typst CLI
+24	pdfTranslatePerformance.ts | coercePerformanceValue() | getPDFTranslatePerformancePreset() | includesAny() | normalizeText()
+25	pdfTranslate.ts | applyPDFTranslateEvent() | buildPDFTranslatedPageMap() | normalizePDFTranslateSnapshot() | normalizeProgressValue()
+26	AGPL-3.0 License | document.v1.json | MIT License | Release Compliance Rationale | Third-Party Notices
+27	firstNonEmptyText() | app_common_io.go | readJSONFile() | writeJSONFile()
+28	CollectionTree | zotero_types.go | ZoteroItem
+29	gateway.ts | getApp() | isWailsApp()
+30	history.ts | getApp() | isWailsApp()
+31	notes.ts | getApp() | isWailsApp()
+32	pdf.ts | getApp() | isWailsApp()
+33	phase6.ts | getApp() | isWailsApp()
+34	ModelDiscoveryModal.tsx | normalizeModelID() | toggleModel()
+35	Font Software | The Nunito Project Authors | SIL Open Font License 1.1
+36	pdf_document_types.go | PDFDocumentPayload
+37	pdf_translate_service.go | PDFTranslateStartInput
+38	cn() | Button.tsx
+39	utils.ts | cn()
+40	postcss.config.js
+41	vite.config.ts
+42	main.tsx
+43	vite-env.d.ts
+44	MarkdownPreview.tsx
+45	readerStore.ts
+46	tabStore.ts
+47	zoteroStore.ts
+48	config.ts
+49	drawing.ts
+50	gateway.ts
+51	history.ts
+52	notes.ts
+53	pdf.ts
+54	zotero.ts
+55	App.d.ts
+56	runtime.d.ts

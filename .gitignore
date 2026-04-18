@@ -1,0 +1,75 @@
+# Go cache and test outputs
+/.gocache/
+*.test
+coverage.out
+
+# Wails build outputs
+/build/*
+!/build/README.md
+!/build/appicon.png
+!/build/darwin/
+!/build/darwin/Info.dev.plist
+!/build/darwin/Info.plist
+!/build/windows/
+!/build/windows/icon.ico
+!/build/windows/info.json
+!/build/windows/wails.exe.manifest
+!/build/windows/installer/
+!/build/windows/installer/project.nsi
+!/build/windows/installer/wails_tools.nsh
+/build/bin/
+/build/windows/installer/tmp/
+/OpenSciReader.exe
+/.wails/
+
+# Frontend dependencies, bundles, and local logs
+/frontend/node_modules/
+/frontend/dist/
+/frontend/package.json.md5
+/frontend/vite-dev.log
+/frontend/vite.stdout.log
+/frontend/vite.stderr.log
+
+# Python cache files from vendored tooling
+__pycache__/
+*.py[cod]
+
+# Local third-party extraction workspace
+/third_party/_typst_extract/
+/third_party/retain-pdf/data/
+
+# Bundled MinerU runtime local build outputs
+/runtime/mineru/windows-amd64/python/
+!/runtime/mineru/windows-amd64/python/README.md
+/runtime/mineru/windows-amd64/env/
+!/runtime/mineru/windows-amd64/env/README.md
+/runtime/mineru/windows-amd64/models/
+!/runtime/mineru/windows-amd64/models/
+!/runtime/mineru/windows-amd64/models/all/
+!/runtime/mineru/windows-amd64/models/all/README.md
+/runtime/mineru/windows-amd64/buildhome/
+/runtime/mineru/windows-amd64/buildstate/
+/runtime/mineru/windows-amd64/smoketest/
+/runtime/mineru/windows-amd64/python-*.exe
+
+# Bundled PDFMathTranslate-next runtime local build outputs
+/runtime/pdf2zh-next/windows-amd64/_upstream_extract/
+/runtime/pdf2zh-next/windows-amd64/pdf2zh-*.zip
+
+# Optional offline WebView2 installer used by release packaging
+/runtime/webview2/windows-amd64/*.exe
+
+# Local graphify outputs
+/graphify-out/cache/
+
+# Vendored upstream build artifacts
+/third_party/MinerU/build/
+/third_party/MinerU/mineru.egg-info/
+/third_party/MinerU/
+# Editor and OS noise
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+
+/.claude/
