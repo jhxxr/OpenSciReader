@@ -242,6 +242,126 @@ func TestImportFilesStoresZoteroExternalLink(t *testing.T) {
 	}
 }
 
+func TestDeleteDocumentRemovesWorkspaceFilesAndScopedEntries(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourceDir := tempDir + "/source"
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("create source dir error: %v", err)
+	}
+	sourceFile := sourceDir + "/paper.pdf"
+	if err := os.WriteFile(sourceFile, []byte("pdf"), 0o600); err != nil {
+		t.Fatalf("write source file error: %v", err)
+	}
+
+	paths := appPaths{
+		RootDir:           tempDir,
+		AppConfigDBPath:   tempDir + "/app.sqlite",
+		OCRCacheDBPath:    tempDir + "/ocr.sqlite",
+		EncryptionKeyPath: tempDir + "/config.key",
+		LibraryRootDir:    tempDir + "/library",
+		WorkspacesRootDir: tempDir + "/library/workspaces",
+	}
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	workspace, err := store.CreateWorkspace(t.Context(), WorkspaceUpsertInput{Name: "Workspace", Description: "", Color: ""})
+	if err != nil {
+		t.Fatalf("CreateWorkspace error: %v", err)
+	}
+
+	imported, err := store.ImportFiles(t.Context(), paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{sourceFile},
+		SourceType:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles error: %v", err)
+	}
+	if len(imported.Documents) != 1 {
+		t.Fatalf("imported documents = %d, want 1", len(imported.Documents))
+	}
+	document := imported.Documents[0]
+
+	if _, err := store.SaveChatHistory(t.Context(), ChatHistoryEntry{
+		WorkspaceID: workspace.ID,
+		DocumentID:  document.ID,
+		ItemID:      document.ID,
+		ItemTitle:   document.Title,
+		Page:        1,
+		Kind:        "summary",
+		Prompt:      "prompt",
+		Response:    "response",
+	}); err != nil {
+		t.Fatalf("SaveChatHistory error: %v", err)
+	}
+	if _, err := store.SaveReaderNote(t.Context(), ReaderNoteEntry{
+		WorkspaceID: workspace.ID,
+		DocumentID:  document.ID,
+		ItemID:      document.ID,
+		ItemTitle:   document.Title,
+		Page:        1,
+		AnchorText:  "anchor",
+		Content:     "note",
+	}); err != nil {
+		t.Fatalf("SaveReaderNote error: %v", err)
+	}
+
+	documentDir := paths.WorkspacesRootDir + "/" + workspace.ID + "/documents/" + document.ID
+	if _, err := os.Stat(documentDir); err != nil {
+		t.Fatalf("document dir stat error before delete: %v", err)
+	}
+
+	if err := store.DeleteDocument(t.Context(), paths, workspace.ID, document.ID); err != nil {
+		t.Fatalf("DeleteDocument error: %v", err)
+	}
+
+	if _, err := os.Stat(documentDir); !os.IsNotExist(err) {
+		t.Fatalf("document dir should be removed, stat err = %v", err)
+	}
+
+	documents, err := store.ListDocumentsByWorkspace(t.Context(), workspace.ID)
+	if err != nil {
+		t.Fatalf("ListDocumentsByWorkspace error: %v", err)
+	}
+	if len(documents) != 0 {
+		t.Fatalf("remaining documents = %d, want 0", len(documents))
+	}
+
+	var count int
+	if err := store.appDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM import_records WHERE document_id = ?;`, document.ID).Scan(&count); err != nil {
+		t.Fatalf("count import_records error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("import_records count = %d, want 0", count)
+	}
+
+	if err := store.appDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM document_assets WHERE document_id = ?;`, document.ID).Scan(&count); err != nil {
+		t.Fatalf("count document_assets error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("document_assets count = %d, want 0", count)
+	}
+
+	if err := store.appDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM ai_chat_history WHERE workspace_id = ? AND document_id = ?;`, workspace.ID, document.ID).Scan(&count); err != nil {
+		t.Fatalf("count ai_chat_history error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("ai_chat_history count = %d, want 0", count)
+	}
+
+	if err := store.appDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM reader_notes WHERE workspace_id = ? AND document_id = ?;`, workspace.ID, document.ID).Scan(&count); err != nil {
+		t.Fatalf("count reader_notes error: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("reader_notes count = %d, want 0", count)
+	}
+}
+
 func TestPDFMarkdownCacheRoundTrip(t *testing.T) {
 	t.Parallel()
 

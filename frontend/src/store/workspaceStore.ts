@@ -15,6 +15,7 @@ export interface WorkspaceState {
   createWorkspace: (input: { name: string; description: string; color: string }) => Promise<Workspace>;
   importFiles: (filePaths: string[]) => Promise<void>;
   importZoteroItem: (item: ZoteroItem) => Promise<void>;
+  deleteDocument: (documentId: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -115,6 +116,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({
         isImporting: false,
         error: error instanceof Error ? error.message : '导入 Zotero 文献失败',
+      });
+      throw error;
+    }
+  },
+
+  async deleteDocument(documentId) {
+    const workspaceId = get().activeWorkspaceId;
+    if (!workspaceId) {
+      throw new Error('请先创建或选择一个工作区');
+    }
+
+    set({ error: null });
+    try {
+      await workspaceApi.deleteDocument(workspaceId, documentId);
+      set((state) => ({
+        documents: state.documents.filter((document) => document.id !== documentId),
+        error: null,
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : '删除工作区文档失败',
       });
       throw error;
     }

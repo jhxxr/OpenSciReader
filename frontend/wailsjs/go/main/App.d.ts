@@ -5,7 +5,11 @@ import {main} from '../models';
 
 export function CancelPDFTranslate(arg1:string):Promise<translator.JobSnapshot>;
 
+export function CreateWorkspace(arg1:main.WorkspaceUpsertInput):Promise<main.Workspace>;
+
 export function DeleteChatHistory(arg1:number):Promise<void>;
+
+export function DeleteDocument(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteModel(arg1:number):Promise<void>;
 
@@ -17,9 +21,9 @@ export function ExtractPDFMarkdown(arg1:string):Promise<main.PDFMarkdownPayload>
 
 export function FetchProviderModels(arg1:number):Promise<main.DiscoveredModelsResponse>;
 
-export function GenerateResearchFigure(arg1:number,arg2:number,arg3:string,arg4:main.GatewayContextData):Promise<main.FigureGenerationResult>;
+export function GenerateResearchFigure(arg1:number,arg2:number,arg3:string,arg4:main.GatewayContextData,arg5:string):Promise<main.FigureGenerationResult>;
 
-export function GetAIWorkspaceConfig():Promise<main.AIWorkspaceConfig>;
+export function GetAIWorkspaceConfig(arg1:string):Promise<main.AIWorkspaceConfig>;
 
 export function GetCollections(arg1:string):Promise<Array<main.CollectionTree>>;
 
@@ -31,13 +35,21 @@ export function GetPDFTranslateRuntimeStatus():Promise<main.PDFTranslateRuntimeC
 
 export function GetPDFTranslateStatus(arg1:string):Promise<translator.JobSnapshot>;
 
+export function ImportFiles(arg1:main.ImportFilesInput):Promise<main.ImportFilesResult>;
+
 export function ImportPDFTranslateRuntime(arg1:string):Promise<main.PDFTranslateRuntimeImportResult>;
 
-export function ListChatHistory(arg1:string):Promise<Array<main.ChatHistoryEntry>>;
+export function ImportZoteroItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<main.ImportFilesResult>;
+
+export function ListChatHistory(arg1:string,arg2:string,arg3:string):Promise<Array<main.ChatHistoryEntry>>;
+
+export function ListDocuments(arg1:string):Promise<Array<main.DocumentRecord>>;
 
 export function ListPDFTranslateJobs():Promise<Array<translator.JobSnapshot>>;
 
-export function ListReaderNotes(arg1:string):Promise<Array<main.ReaderNoteEntry>>;
+export function ListReaderNotes(arg1:string,arg2:string,arg3:string):Promise<Array<main.ReaderNoteEntry>>;
+
+export function ListWorkspaces():Promise<Array<main.Workspace>>;
 
 export function LoadPDFDocument(arg1:string):Promise<main.PDFDocumentPayload>;
 
@@ -47,7 +59,7 @@ export function RemovePDFTranslateRuntime():Promise<void>;
 
 export function ResolvePDFPath(arg1:string):Promise<string>;
 
-export function SaveAIWorkspaceConfig(arg1:main.AIWorkspaceConfig):Promise<main.AIWorkspaceConfig>;
+export function SaveAIWorkspaceConfig(arg1:string,arg2:main.AIWorkspaceConfig):Promise<main.AIWorkspaceConfig>;
 
 export function SaveChatHistory(arg1:main.ChatHistoryEntry):Promise<main.ChatHistoryEntry>;
 
@@ -56,6 +68,8 @@ export function SaveModel(arg1:main.ModelUpsertInput):Promise<main.ModelRecord>;
 export function SaveProvider(arg1:main.ProviderUpsertInput):Promise<main.ProviderRecord>;
 
 export function SaveReaderNote(arg1:main.ReaderNoteEntry):Promise<main.ReaderNoteEntry>;
+
+export function SelectImportFiles():Promise<Array<string>>;
 
 export function SelectPDFTranslateRuntimePackage():Promise<string>;
 

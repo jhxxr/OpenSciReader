@@ -12,6 +12,7 @@ interface WailsWorkspaceApp {
   ImportFiles: (input: ImportFilesInput) => Promise<ImportFilesResult>;
   ImportZoteroItem: (workspaceId: string, itemId: string, pdfPath: string, title: string, citeKey: string) => Promise<ImportFilesResult>;
   ListDocuments: (workspaceId: string) => Promise<DocumentRecord[]>;
+  DeleteDocument: (workspaceId: string, documentId: string) => Promise<void>;
   SelectImportFiles?: () => Promise<string[]>;
 }
 
@@ -65,6 +66,14 @@ export const workspaceApi = {
       return [];
     }
     return app.ListDocuments(workspaceId);
+  },
+
+  async deleteDocument(workspaceId: string, documentId: string): Promise<void> {
+    const app = getApp();
+    if (!app) {
+      throw new Error('Workspace desktop bridge is unavailable');
+    }
+    return app.DeleteDocument(workspaceId, documentId);
   },
 
   async selectLocalFiles(): Promise<string[]> {

@@ -882,6 +882,92 @@ func (s *configStore) ListDocumentsByWorkspace(ctx context.Context, workspaceID 
 	return documents, nil
 }
 
+func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, workspaceID, documentID string) error {
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	trimmedDocumentID := strings.TrimSpace(documentID)
+	if trimmedWorkspaceID == "" {
+		return fmt.Errorf("workspace id is required")
+	}
+	if trimmedDocumentID == "" {
+		return fmt.Errorf("document id is required")
+	}
+
+	if _, err := s.GetWorkspace(ctx, trimmedWorkspaceID); err != nil {
+		return err
+	}
+
+	var existingDocumentID string
+	if err := s.appDB.QueryRowContext(ctx, `
+		SELECT id
+		FROM documents
+		WHERE id = ? AND workspace_id = ?
+		LIMIT 1;
+	`, trimmedDocumentID, trimmedWorkspaceID).Scan(&existingDocumentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("document %s not found in workspace %s", trimmedDocumentID, trimmedWorkspaceID)
+		}
+		return fmt.Errorf("load document before delete: %w", err)
+	}
+
+	documentRoot := filepath.Join(paths.WorkspacesRootDir, trimmedWorkspaceID, "documents", trimmedDocumentID)
+	if err := os.RemoveAll(documentRoot); err != nil {
+		return fmt.Errorf("remove document files: %w", err)
+	}
+
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin document delete transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `
+		DELETE FROM ai_chat_history
+		WHERE workspace_id = ? AND document_id = ?;
+	`, trimmedWorkspaceID, trimmedDocumentID); err != nil {
+		return fmt.Errorf("delete document chat history: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		DELETE FROM reader_notes
+		WHERE workspace_id = ? AND document_id = ?;
+	`, trimmedWorkspaceID, trimmedDocumentID); err != nil {
+		return fmt.Errorf("delete document reader notes: %w", err)
+	}
+
+	deleteResult, err := tx.ExecContext(ctx, `
+		DELETE FROM documents
+		WHERE id = ? AND workspace_id = ?;
+	`, trimmedDocumentID, trimmedWorkspaceID)
+	if err != nil {
+		return fmt.Errorf("delete document: %w", err)
+	}
+
+	rowsAffected, err := deleteResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check document delete result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("document %s not found in workspace %s", trimmedDocumentID, trimmedWorkspaceID)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE workspaces
+		SET updated_at = ?
+		WHERE id = ?;
+	`, nowRFC3339(), trimmedWorkspaceID); err != nil {
+		return fmt.Errorf("touch workspace after document delete: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit document delete transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *configStore) ImportFiles(ctx context.Context, paths appPaths, input ImportFilesInput) (ImportFilesResult, error) {
 	workspace, err := s.GetWorkspace(ctx, input.WorkspaceID)
 	if err != nil {

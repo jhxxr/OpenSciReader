@@ -6,8 +6,16 @@ export function CancelPDFTranslate(arg1) {
   return window['go']['main']['App']['CancelPDFTranslate'](arg1);
 }
 
+export function CreateWorkspace(arg1) {
+  return window['go']['main']['App']['CreateWorkspace'](arg1);
+}
+
 export function DeleteChatHistory(arg1) {
   return window['go']['main']['App']['DeleteChatHistory'](arg1);
+}
+
+export function DeleteDocument(arg1, arg2) {
+  return window['go']['main']['App']['DeleteDocument'](arg1, arg2);
 }
 
 export function DeleteModel(arg1) {
@@ -30,12 +38,12 @@ export function FetchProviderModels(arg1) {
   return window['go']['main']['App']['FetchProviderModels'](arg1);
 }
 
-export function GenerateResearchFigure(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['GenerateResearchFigure'](arg1, arg2, arg3, arg4);
+export function GenerateResearchFigure(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['GenerateResearchFigure'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function GetAIWorkspaceConfig() {
-  return window['go']['main']['App']['GetAIWorkspaceConfig']();
+export function GetAIWorkspaceConfig(arg1) {
+  return window['go']['main']['App']['GetAIWorkspaceConfig'](arg1);
 }
 
 export function GetCollections(arg1) {
@@ -58,20 +66,36 @@ export function GetPDFTranslateStatus(arg1) {
   return window['go']['main']['App']['GetPDFTranslateStatus'](arg1);
 }
 
+export function ImportFiles(arg1) {
+  return window['go']['main']['App']['ImportFiles'](arg1);
+}
+
 export function ImportPDFTranslateRuntime(arg1) {
   return window['go']['main']['App']['ImportPDFTranslateRuntime'](arg1);
 }
 
-export function ListChatHistory(arg1) {
-  return window['go']['main']['App']['ListChatHistory'](arg1);
+export function ImportZoteroItem(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ImportZoteroItem'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function ListChatHistory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListChatHistory'](arg1, arg2, arg3);
+}
+
+export function ListDocuments(arg1) {
+  return window['go']['main']['App']['ListDocuments'](arg1);
 }
 
 export function ListPDFTranslateJobs() {
   return window['go']['main']['App']['ListPDFTranslateJobs']();
 }
 
-export function ListReaderNotes(arg1) {
-  return window['go']['main']['App']['ListReaderNotes'](arg1);
+export function ListReaderNotes(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListReaderNotes'](arg1, arg2, arg3);
+}
+
+export function ListWorkspaces() {
+  return window['go']['main']['App']['ListWorkspaces']();
 }
 
 export function LoadPDFDocument(arg1) {
@@ -90,8 +114,8 @@ export function ResolvePDFPath(arg1) {
   return window['go']['main']['App']['ResolvePDFPath'](arg1);
 }
 
-export function SaveAIWorkspaceConfig(arg1) {
-  return window['go']['main']['App']['SaveAIWorkspaceConfig'](arg1);
+export function SaveAIWorkspaceConfig(arg1, arg2) {
+  return window['go']['main']['App']['SaveAIWorkspaceConfig'](arg1, arg2);
 }
 
 export function SaveChatHistory(arg1) {
@@ -108,6 +132,10 @@ export function SaveProvider(arg1) {
 
 export function SaveReaderNote(arg1) {
   return window['go']['main']['App']['SaveReaderNote'](arg1);
+}
+
+export function SelectImportFiles() {
+  return window['go']['main']['App']['SelectImportFiles']();
 }
 
 export function SelectPDFTranslateRuntimePackage() {

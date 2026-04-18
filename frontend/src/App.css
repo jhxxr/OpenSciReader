@@ -91,6 +91,15 @@ body,
   display: flex;
   flex-direction: column;
   height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
   overflow: hidden;
 }
 
@@ -262,7 +271,9 @@ body,
 }
 
 .home-page {
+  flex: 1;
   height: 100%;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -578,6 +589,9 @@ body,
 
 /* ===== READER VIEW (Per-Tab) ===== */
 .reader-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   height: 100%;
   overflow: hidden;
@@ -587,6 +601,7 @@ body,
 .reader-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -597,6 +612,7 @@ body,
 .reader-sidebar {
   width: var(--osr-sidebar-width);
   flex-shrink: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--osr-bg-card);
@@ -764,6 +780,23 @@ body,
 .item-button-card:hover {
   border-color: var(--osr-accent-border);
   box-shadow: var(--osr-shadow-sm);
+}
+
+.home-workspace-document-card {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.home-workspace-document-button {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+
+.home-workspace-document-delete {
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .figure-preview-card {

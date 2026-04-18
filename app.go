@@ -169,6 +169,10 @@ func (a *App) ListDocuments(workspaceID string) ([]DocumentRecord, error) {
 	return a.store.ListDocumentsByWorkspace(a.ctx, workspaceID)
 }
 
+func (a *App) DeleteDocument(workspaceID, documentID string) error {
+	return a.store.DeleteDocument(a.ctx, a.paths, workspaceID, documentID)
+}
+
 func (a *App) GetCollections(source string) ([]CollectionTree, error) {
 	return a.zotero.GetCollections(a.ctx, source)
 }

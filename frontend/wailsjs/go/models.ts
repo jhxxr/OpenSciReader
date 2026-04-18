@@ -34,6 +34,8 @@ export namespace main {
 	}
 	export class ChatHistoryEntry {
 	    id: number;
+	    workspaceId: string;
+	    documentId: string;
 	    itemId: string;
 	    itemTitle: string;
 	    page: number;
@@ -49,6 +51,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
 	        this.itemId = source["itemId"];
 	        this.itemTitle = source["itemTitle"];
 	        this.page = source["page"];
@@ -288,6 +292,38 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class DocumentRecord {
+	    id: string;
+	    workspaceId: string;
+	    title: string;
+	    documentType: string;
+	    sourceType: string;
+	    defaultAssetId: string;
+	    originalFileName: string;
+	    primaryPdfPath: string;
+	    contentHash: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.title = source["title"];
+	        this.documentType = source["documentType"];
+	        this.sourceType = source["sourceType"];
+	        this.defaultAssetId = source["defaultAssetId"];
+	        this.originalFileName = source["originalFileName"];
+	        this.primaryPdfPath = source["primaryPdfPath"];
+	        this.contentHash = source["contentHash"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class FigureGenerationResult {
 	    mimeType: string;
 	    dataUrl: string;
@@ -324,6 +360,113 @@ export namespace main {
 	        this.citeKey = source["citeKey"];
 	    }
 	}
+	export class ImportFilesInput {
+	    workspaceId: string;
+	    filePaths: string[];
+	    sourceType: string;
+	    sourceLabel: string;
+	    sourceRef: string;
+	    title: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportFilesInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspaceId = source["workspaceId"];
+	        this.filePaths = source["filePaths"];
+	        this.sourceType = source["sourceType"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sourceRef = source["sourceRef"];
+	        this.title = source["title"];
+	    }
+	}
+	export class ImportRecord {
+	    id: string;
+	    workspaceId: string;
+	    documentId: string;
+	    sourceType: string;
+	    sourceLabel: string;
+	    sourceRef: string;
+	    status: string;
+	    message: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
+	        this.sourceType = source["sourceType"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sourceRef = source["sourceRef"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class Workspace {
+	    id: string;
+	    name: string;
+	    description: string;
+	    color: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Workspace(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.color = source["color"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class ImportFilesResult {
+	    workspace: Workspace;
+	    documents: DocumentRecord[];
+	    imports: ImportRecord[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportFilesResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspace = this.convertValues(source["workspace"], Workspace);
+	        this.documents = this.convertValues(source["documents"], DocumentRecord);
+	        this.imports = this.convertValues(source["imports"], ImportRecord);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	
 	export class ModelUpsertInput {
 	    id: number;
@@ -527,6 +670,8 @@ export namespace main {
 	}
 	export class ReaderNoteEntry {
 	    id: number;
+	    workspaceId: string;
+	    documentId: string;
 	    itemId: string;
 	    itemTitle: string;
 	    page: number;
@@ -541,12 +686,33 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
 	        this.itemId = source["itemId"];
 	        this.itemTitle = source["itemTitle"];
 	        this.page = source["page"];
 	        this.anchorText = source["anchorText"];
 	        this.content = source["content"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	
+	export class WorkspaceUpsertInput {
+	    id: string;
+	    name: string;
+	    description: string;
+	    color: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceUpsertInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.color = source["color"];
 	    }
 	}
 	export class ZoteroItem {

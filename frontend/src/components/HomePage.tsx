@@ -21,6 +21,7 @@ import { Button } from './ui/Button';
 import type { PDFTranslateJobSnapshot } from '../types/pdfTranslate';
 import type { CollectionTree } from '../types/zotero';
 import type { ZoteroState } from '../store/zoteroStore';
+import { useTabStore } from '../store/tabStore';
 import type { WorkspaceState } from '../store/workspaceStore';
 
 interface HomePageProps {
@@ -37,6 +38,9 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const tabs = useTabStore((state) => state.tabs);
+  const closeTab = useTabStore((state) => state.closeTab);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,6 +140,31 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     });
   }
 
+  async function handleDeleteWorkspaceDocument(document: { id: string; workspaceId: string; title: string; originalFileName: string }) {
+    const label = document.title || document.originalFileName || document.id;
+    const confirmed =
+      typeof window === 'undefined'
+        ? true
+        : window.confirm('\u786e\u8ba4\u4ece\u5f53\u524d\u5de5\u4f5c\u533a\u5220\u9664\u6587\u6863 "' + label + '" \u5417\uff1f\u8fd9\u4f1a\u79fb\u9664\u672c\u5730\u526f\u672c\u3001\u7b14\u8bb0\u548c\u804a\u5929\u8bb0\u5f55\u3002');
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingDocumentId(document.id);
+    try {
+      await workspace.deleteDocument(document.id);
+      const matchingTab = tabs.find(
+        (tab) => tab.workspaceId === document.workspaceId && tab.documentId === document.id,
+      );
+      if (matchingTab) {
+        closeTab(matchingTab.id);
+      }
+    } catch {
+    } finally {
+      setDeletingDocumentId(null);
+    }
+  }
+
   return (
     <div className="home-page">
       <div className="home-body">
@@ -163,15 +192,27 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
             {workspace.documents.length ? (
               <div className="library-item-list">
                 {workspace.documents.map((document: { id: string; workspaceId: string; title: string; primaryPdfPath: string; originalFileName: string; sourceType: string }) => (
-                  <button
-                    key={document.id}
-                    type="button"
-                    className="item-button item-button-card"
-                    onDoubleClick={() => onOpenPdf({ id: document.id, title: document.title, pdfPath: document.primaryPdfPath ?? null, workspaceId: document.workspaceId, documentId: document.id, sourceKind: 'workspace_document' })}
-                  >
+                  <div key={document.id} className="item-button-card home-workspace-document-card">
+                    <button
+                      type="button"
+                      className="item-button home-workspace-document-button"
+                      onDoubleClick={() => onOpenPdf({ id: document.id, title: document.title, pdfPath: document.primaryPdfPath ?? null, workspaceId: document.workspaceId, documentId: document.id, sourceKind: 'workspace_document' })}
+                    >
                     <strong>{document.title}</strong>
                     <small>{document.originalFileName || '已导入文档'} · {document.sourceType}</small>
-                  </button>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="home-workspace-document-delete danger"
+                      onClick={() => void handleDeleteWorkspaceDocument(document)}
+                      disabled={deletingDocumentId === document.id}
+                      aria-label={`删除 ${document.title}`}
+                      title={`删除 ${document.title}`}
+                    >
+                      {deletingDocumentId === document.id ? <LoaderCircle size={14} className="spin-inline" /> : <Trash2 size={14} />}
+                    </Button>
+                  </div>
                 ))}
               </div>
             ) : <p className="empty-inline">当前工作区还没有文档，先从本地导入 PDF 或 Markdown。</p>}
