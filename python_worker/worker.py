@@ -628,7 +628,7 @@ async def run_worker(request: dict) -> int:
         # Running pdf2zh_next in-process avoids a nested Python subprocess on Windows,
         # where the embeddable runtime ignores PYTHONPATH/sitecustomize and loses our
         # OpenAI-compatible user-agent patch.
-        settings.basic.debug = True
+        settings.basic.debug = False
     except Exception as exc:
         emit(
             {
