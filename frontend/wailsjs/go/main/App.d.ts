@@ -25,7 +25,11 @@ export function GetConfigSnapshot():Promise<main.ConfigSnapshot>;
 
 export function GetItemsByCollection(arg1:string):Promise<Array<main.ZoteroItem>>;
 
+export function GetPDFTranslateRuntimeStatus():Promise<main.PDFTranslateRuntimeConfig>;
+
 export function GetPDFTranslateStatus(arg1:string):Promise<translator.JobSnapshot>;
+
+export function ImportPDFTranslateRuntime(arg1:string):Promise<main.PDFTranslateRuntimeImportResult>;
 
 export function ListChatHistory(arg1:string):Promise<Array<main.ChatHistoryEntry>>;
 
@@ -36,6 +40,8 @@ export function ListReaderNotes(arg1:string):Promise<Array<main.ReaderNoteEntry>
 export function LoadPDFDocument(arg1:string):Promise<main.PDFDocumentPayload>;
 
 export function ProxyTranslation(arg1:number,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function RemovePDFTranslateRuntime():Promise<void>;
 
 export function ResolvePDFPath(arg1:string):Promise<string>;
 
@@ -48,6 +54,8 @@ export function SaveModel(arg1:main.ModelUpsertInput):Promise<main.ModelRecord>;
 export function SaveProvider(arg1:main.ProviderUpsertInput):Promise<main.ProviderRecord>;
 
 export function SaveReaderNote(arg1:main.ReaderNoteEntry):Promise<main.ReaderNoteEntry>;
+
+export function SelectPDFTranslateRuntimePackage():Promise<string>;
 
 export function StartPDFTranslate(arg1:main.PDFTranslateStartInput):Promise<translator.JobSnapshot>;
 

@@ -27,8 +27,10 @@ func (g *gatewayService) FetchProviderModels(ctx context.Context, providerID int
 		return DiscoveredModelsResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	if useBearerAuth && strings.TrimSpace(provider.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(provider.APIKey))
+	if useBearerAuth {
+		applyProviderRequestHeaders(req, provider.APIKey)
+	} else {
+		applyProviderRequestHeaders(req, "")
 	}
 
 	resp, err := g.client.Do(req)

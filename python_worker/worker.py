@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import traceback
@@ -13,9 +14,71 @@ import types
 import typing
 
 
+OPENAI_COMPATIBLE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/123.0.0.0 Safari/537.36"
+)
+
+
 def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+
+
+def install_openai_compatible_user_agent_patch() -> None:
+    try:
+        import openai
+    except Exception:
+        return
+
+    if getattr(openai.OpenAI, "_openscireader_user_agent_patched", False):
+        return
+
+    original_init = openai.OpenAI.__init__
+
+    def patched_init(self, *args, **kwargs):
+        headers = dict(kwargs.get("default_headers") or {})
+        headers.setdefault("User-Agent", OPENAI_COMPATIBLE_USER_AGENT)
+        kwargs["default_headers"] = headers
+        return original_init(self, *args, **kwargs)
+
+    openai.OpenAI.__init__ = patched_init
+    openai.OpenAI._openscireader_user_agent_patched = True
+
+
+def summarize_exception_message(exc: BaseException) -> str:
+    text = str(exc or "").replace("\r\n", "\n").strip()
+    if not text:
+        return exc.__class__.__name__
+
+    for marker in (
+        "\nTraceback (most recent call last):",
+        "\nSubprocess traceback:",
+        "\nReceived error from subprocess:",
+    ):
+        idx = text.find(marker)
+        if idx >= 0:
+            text = text[:idx].strip()
+
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "settings.basic.input_files is for cli" in line:
+            line = line.split("settings.basic.input_files is for cli", 1)[0].rstrip(" :")
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line:
+            continue
+        if line not in lines:
+            lines.append(line)
+        if len(lines) >= 3:
+            break
+
+    if not lines:
+        return exc.__class__.__name__
+    return " ".join(lines)
 
 
 def read_request() -> dict:
@@ -537,13 +600,14 @@ async def run_worker(request: dict) -> int:
         return 1
 
     try:
+        install_openai_compatible_user_agent_patch()
         module = importlib.import_module("pdf2zh_next.high_level")
         do_translate_async_stream = getattr(module, "do_translate_async_stream")
     except Exception as exc:
         emit(
             {
                 "type": "error",
-                "error": f"import pdf2zh_next.high_level failed: {exc}",
+                "error": f"import pdf2zh_next.high_level failed: {summarize_exception_message(exc)}",
                 "error_type": exc.__class__.__name__,
                 "details": traceback.format_exc(),
             }
@@ -556,11 +620,20 @@ async def run_worker(request: dict) -> int:
 
     try:
         settings = build_settings(request)
+        # We pass the target PDF through do_translate_async_stream(file=...).
+        # Keeping basic.input_files set only triggers a warning in pdf2zh_next.
+        if getattr(getattr(settings, "basic", None), "input_files", None):
+            settings.basic.input_files = set()
+        # OpenSciReader already isolates translation in this dedicated worker process.
+        # Running pdf2zh_next in-process avoids a nested Python subprocess on Windows,
+        # where the embeddable runtime ignores PYTHONPATH/sitecustomize and loses our
+        # OpenAI-compatible user-agent patch.
+        settings.basic.debug = True
     except Exception as exc:
         emit(
             {
                 "type": "error",
-                "error": f"build settings failed: {exc}",
+                "error": f"build settings failed: {summarize_exception_message(exc)}",
                 "error_type": exc.__class__.__name__,
                 "details": traceback.format_exc(),
             }
@@ -574,7 +647,7 @@ async def run_worker(request: dict) -> int:
         emit(
             {
                 "type": "error",
-                "error": str(exc),
+                "error": summarize_exception_message(exc),
                 "error_type": exc.__class__.__name__,
                 "details": traceback.format_exc(),
             }

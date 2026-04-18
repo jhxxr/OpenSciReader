@@ -228,11 +228,37 @@ func formatWorkerEventError(event workerEvent) string {
 	if event.ErrorType != "" {
 		parts = append(parts, event.ErrorType)
 	}
-	if event.Error != "" {
-		parts = append(parts, event.Error)
+	if message := compactWorkerErrorMessage(event.Error); message != "" {
+		parts = append(parts, message)
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, ": ")
 	}
 	return "worker returned an unknown error"
+}
+
+func compactWorkerErrorMessage(raw string) string {
+	text := strings.TrimSpace(strings.ReplaceAll(raw, "\r\n", "\n"))
+	if text == "" {
+		return ""
+	}
+
+	line := text
+	for _, marker := range []string{
+		"\n",
+		"Traceback:",
+		"Subprocess traceback:",
+		"Received error from subprocess:",
+	} {
+		if idx := strings.Index(line, marker); idx >= 0 {
+			line = line[:idx]
+		}
+	}
+
+	const inputFilesWarning = "settings.basic.input_files is for cli"
+	if idx := strings.Index(line, inputFilesWarning); idx >= 0 {
+		line = line[:idx]
+	}
+
+	return strings.TrimSpace(strings.TrimRight(line, " :"))
 }

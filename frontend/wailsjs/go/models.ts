@@ -100,6 +100,38 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class PDFTranslateRuntimeConfig {
+	    installed: boolean;
+	    status: string;
+	    runtimeId: string;
+	    version: string;
+	    platform: string;
+	    runtimeDir: string;
+	    pythonPath: string;
+	    manifestPath: string;
+	    installedAt: string;
+	    sourceFileName: string;
+	    lastValidationError: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PDFTranslateRuntimeConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.status = source["status"];
+	        this.runtimeId = source["runtimeId"];
+	        this.version = source["version"];
+	        this.platform = source["platform"];
+	        this.runtimeDir = source["runtimeDir"];
+	        this.pythonPath = source["pythonPath"];
+	        this.manifestPath = source["manifestPath"];
+	        this.installedAt = source["installedAt"];
+	        this.sourceFileName = source["sourceFileName"];
+	        this.lastValidationError = source["lastValidationError"];
+	    }
+	}
 	export class ModelRecord {
 	    id: number;
 	    providerId: number;
@@ -178,6 +210,7 @@ export namespace main {
 	}
 	export class ConfigSnapshot {
 	    providers: ProviderConfig[];
+	    pdfTranslateRuntime: PDFTranslateRuntimeConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConfigSnapshot(source);
@@ -186,6 +219,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.providers = this.convertValues(source["providers"], ProviderConfig);
+	        this.pdfTranslateRuntime = this.convertValues(source["pdfTranslateRuntime"], PDFTranslateRuntimeConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -322,6 +356,37 @@ export namespace main {
 	        this.path = source["path"];
 	        this.dataBase64 = source["dataBase64"];
 	    }
+	}
+	
+	export class PDFTranslateRuntimeImportResult {
+	    runtime: PDFTranslateRuntimeConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new PDFTranslateRuntimeImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runtime = this.convertValues(source["runtime"], PDFTranslateRuntimeConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class PDFTranslateStartInput {
 	    pdfPath: string;

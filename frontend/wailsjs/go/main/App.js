@@ -46,8 +46,16 @@ export function GetItemsByCollection(arg1) {
   return window['go']['main']['App']['GetItemsByCollection'](arg1);
 }
 
+export function GetPDFTranslateRuntimeStatus() {
+  return window['go']['main']['App']['GetPDFTranslateRuntimeStatus']();
+}
+
 export function GetPDFTranslateStatus(arg1) {
   return window['go']['main']['App']['GetPDFTranslateStatus'](arg1);
+}
+
+export function ImportPDFTranslateRuntime(arg1) {
+  return window['go']['main']['App']['ImportPDFTranslateRuntime'](arg1);
 }
 
 export function ListChatHistory(arg1) {
@@ -68,6 +76,10 @@ export function LoadPDFDocument(arg1) {
 
 export function ProxyTranslation(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ProxyTranslation'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function RemovePDFTranslateRuntime() {
+  return window['go']['main']['App']['RemovePDFTranslateRuntime']();
 }
 
 export function ResolvePDFPath(arg1) {
@@ -92,6 +104,10 @@ export function SaveProvider(arg1) {
 
 export function SaveReaderNote(arg1) {
   return window['go']['main']['App']['SaveReaderNote'](arg1);
+}
+
+export function SelectPDFTranslateRuntimePackage() {
+  return window['go']['main']['App']['SelectPDFTranslateRuntimePackage']();
 }
 
 export function StartPDFTranslate(arg1) {

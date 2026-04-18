@@ -662,7 +662,7 @@ func (m *Manager) applyWorkerEvent(job *jobRuntime, chunkIndex int, event worker
 		job.emit(JobEvent{
 			Type:      "error",
 			JobStatus: JobStatusFailed,
-			Error:     event.Error,
+			Error:     compactWorkerErrorMessage(event.Error),
 			ErrorType: event.ErrorType,
 			Details:   event.Details,
 			Chunk:     job.chunkByIndex(chunkIndex),

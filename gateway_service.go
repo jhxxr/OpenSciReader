@@ -119,7 +119,7 @@ func (g *gatewayService) streamOpenAICompatible(appCtx context.Context, eventNam
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	applyProviderRequestHeaders(req, provider.APIKey)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -608,7 +608,7 @@ func (g *gatewayService) proxyLLMTranslation(ctx context.Context, providerID, mo
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	applyProviderRequestHeaders(req, provider.APIKey)
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return "", err
@@ -677,7 +677,7 @@ func (g *gatewayService) proxyLLMTranslationWithContext(
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	applyProviderRequestHeaders(req, provider.APIKey)
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return "", err
