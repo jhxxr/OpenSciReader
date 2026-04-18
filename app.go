@@ -65,7 +65,7 @@ func (a *App) SaveAIWorkspaceConfig(input AIWorkspaceConfig) (AIWorkspaceConfig,
 }
 
 func (a *App) GetPDFTranslateRuntimeStatus() (PDFTranslateRuntimeConfig, error) {
-	return a.store.GetPDFTranslateRuntimeConfig(a.ctx)
+	return resolvePDFTranslateRuntime(a.paths, a.store).Config, nil
 }
 
 func (a *App) ImportPDFTranslateRuntime(packagePath string) (PDFTranslateRuntimeImportResult, error) {

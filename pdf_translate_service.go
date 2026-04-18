@@ -64,13 +64,11 @@ func (a *App) startPDFTranslate(ctx context.Context, input PDFTranslateStartInpu
 		return translator.JobSnapshot{}, fmt.Errorf("pdf translate service is unavailable")
 	}
 
-	if runtime, err := a.store.GetPDFTranslateRuntimeConfig(ctx); err == nil {
-		if runtime.Status != PDFTranslateRuntimeStatusValid {
-			if strings.TrimSpace(runtime.LastValidationError) != "" {
-				return translator.JobSnapshot{}, fmt.Errorf("pdf translate runtime unavailable: %s", runtime.LastValidationError)
-			}
-			return translator.JobSnapshot{}, fmt.Errorf("pdf translate runtime is not installed")
+	if runtime := resolvePDFTranslateRuntime(a.paths, a.store).Config; runtime.Status != PDFTranslateRuntimeStatusValid {
+		if strings.TrimSpace(runtime.LastValidationError) != "" {
+			return translator.JobSnapshot{}, fmt.Errorf("pdf translate runtime unavailable: %s", runtime.LastValidationError)
 		}
+		return translator.JobSnapshot{}, fmt.Errorf("pdf translate runtime is not installed")
 	}
 
 	provider, err := a.store.GetProviderSecret(ctx, input.LLMProviderID)

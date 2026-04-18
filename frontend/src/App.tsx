@@ -330,7 +330,8 @@ export default function App() {
 
   const handleRuntimePathChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    setRuntimeImportPath(file?.name || '');
+    const path = file && 'path' in file && typeof file.path === 'string' ? file.path : '';
+    setRuntimeImportPath(path || file?.name || '');
   };
 
   const handleImportRuntime = async () => {

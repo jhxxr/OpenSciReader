@@ -196,10 +196,12 @@ func cloneAppPathsForTest(t *testing.T, source appPaths) appPaths {
 		AppConfigDBPath:   filepath.Join(rootDir, "app_config.sqlite"),
 		OCRCacheDBPath:    filepath.Join(rootDir, "ocr_cache.sqlite"),
 		EncryptionKeyPath: filepath.Join(rootDir, "config.key"),
-		TranslateRootDir:  filepath.Join(rootDir, "reader_translate"),
-		TranslateJobsDir:  filepath.Join(rootDir, "reader_translate", "jobs"),
+		TranslateRootDir:         filepath.Join(rootDir, "reader_translate"),
+		TranslateJobsDir:         filepath.Join(rootDir, "reader_translate", "jobs"),
+		TranslateRuntimeRootDir:  filepath.Join(rootDir, "reader_translate", "runtime"),
+		TranslateRuntimeCacheDir: filepath.Join(rootDir, "reader_translate", "runtime-cache"),
 	}
-	for _, directory := range []string{cloned.RootDir, cloned.TranslateJobsDir} {
+	for _, directory := range []string{cloned.RootDir, cloned.TranslateJobsDir, cloned.TranslateRuntimeRootDir, cloned.TranslateRuntimeCacheDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatalf("mkdir %s: %v", directory, err)
 		}
