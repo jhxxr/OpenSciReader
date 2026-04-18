@@ -110,9 +110,17 @@ func (a *App) startPDFTranslate(ctx context.Context, input PDFTranslateStartInpu
 		Provider: translator.ProviderConfig{
 			ProviderID:   provider.ID,
 			ProviderName: provider.Name,
-			BaseURL:      provider.BaseURL,
+			BaseURL:      normalizeOpenAICompatibleBaseURL(provider.BaseURL),
 			APIKey:       provider.APIKey,
 			ModelID:      model.ModelID,
 		},
 	})
+}
+
+func normalizeOpenAICompatibleBaseURL(raw string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(raw), "/")
+	baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
+	baseURL = strings.TrimSuffix(baseURL, "/completions")
+	baseURL = strings.TrimSuffix(baseURL, "/models")
+	return baseURL
 }

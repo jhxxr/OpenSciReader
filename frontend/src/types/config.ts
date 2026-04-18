@@ -20,6 +20,14 @@ export interface PDFTranslateRuntimeConfig {
   lastValidationError: string;
 }
 
+export interface PDFTranslateRuntimeImportProgress {
+  stage: string;
+  message: string;
+  progress: number;
+  bytesCompleted: number;
+  bytesTotal: number;
+}
+
 export const DEFAULT_PDF_TRANSLATE_RUNTIME_CONFIG: PDFTranslateRuntimeConfig = {
   installed: false,
   status: "missing",

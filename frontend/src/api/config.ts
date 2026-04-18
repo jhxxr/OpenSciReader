@@ -1,6 +1,7 @@
 import {
   DEFAULT_AI_WORKSPACE_CONFIG,
   DEFAULT_PDF_TRANSLATE_RUNTIME_CONFIG,
+  type PDFTranslateRuntimeImportProgress,
   type AIWorkspaceConfig,
   type ConfigSnapshot,
   type DiscoveredModel,
@@ -13,6 +14,7 @@ import {
   type ProviderType,
   type ProviderUpsertInput,
 } from "../types/config";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 import {
   findMatchingProviderTemplate,
   getRecommendedModelsForProvider,
@@ -37,10 +39,16 @@ interface WailsApp {
   DeleteModel: (id: number) => Promise<void>;
 }
 
+const pdfTranslateRuntimeImportEventName = "pdf-translate-runtime:import-progress";
+
 function isWailsApp(
   value: unknown,
 ): value is { go: { main: { App: WailsApp } } } {
   return typeof value === "object" && value !== null && "go" in value;
+}
+
+function isWailsDesktop() {
+  return typeof window !== "undefined" && isWailsApp(window) && Boolean(window.go?.main?.App);
 }
 
 function delay(ms: number): Promise<void> {
@@ -332,12 +340,8 @@ function createMockApp(): WailsApp {
 }
 
 function getApp(): WailsApp {
-  if (
-    typeof window !== "undefined" &&
-    isWailsApp(window) &&
-    window.go?.main?.App
-  ) {
-    return window.go.main.App;
+  if (isWailsDesktop()) {
+    return (window as typeof window & { go: { main: { App: WailsApp } } }).go.main.App;
   }
 
   return createMockApp();
@@ -363,6 +367,16 @@ export const configApi = {
   },
   importPDFTranslateRuntime(packagePath: string): Promise<{ runtime: PDFTranslateRuntimeConfig }> {
     return app.ImportPDFTranslateRuntime(packagePath);
+  },
+  subscribePDFTranslateRuntimeImportProgress(
+    onProgress: (progress: PDFTranslateRuntimeImportProgress) => void,
+  ): () => void {
+    if (!isWailsDesktop()) {
+      return () => {};
+    }
+    return EventsOn(pdfTranslateRuntimeImportEventName, (payload: PDFTranslateRuntimeImportProgress) => {
+      onProgress(payload);
+    });
   },
   removePDFTranslateRuntime(): Promise<void> {
     return app.RemovePDFTranslateRuntime();

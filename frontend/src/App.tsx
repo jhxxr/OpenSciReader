@@ -26,6 +26,7 @@ import {
   type ModelRecord,
   type ModelUpsertInput,
   type PDFTranslateRuntimeConfig,
+  type PDFTranslateRuntimeImportProgress,
   type ProviderConfig,
   type ProviderRecord,
   type ProviderUpsertInput,
@@ -117,6 +118,7 @@ export default function App() {
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [runtimeImportPath, setRuntimeImportPath] = useState('');
+  const [runtimeImportProgress, setRuntimeImportProgress] = useState<PDFTranslateRuntimeImportProgress | null>(null);
 
   useEffect(() => {
     void loadConfig();
@@ -125,6 +127,14 @@ export default function App() {
   useEffect(() => {
     void zotero.loadCollections();
   }, [zotero.loadCollections]);
+
+  useEffect(() => configApi.subscribePDFTranslateRuntimeImportProgress(setRuntimeImportProgress), []);
+
+  useEffect(() => {
+    if (runtimeAction !== 'importing') {
+      setRuntimeImportProgress(null);
+    }
+  }, [runtimeAction]);
 
   useEffect(() => {
     setModelForm((current) => {
@@ -337,7 +347,7 @@ export default function App() {
       }
     } catch (error) {
       useConfigStore.setState({
-        error: getErrorMessage(error, 'Failed to choose PDF translation runtime package'),
+        error: getErrorMessage(error, '选择 PDF 翻译运行时安装包失败'),
       });
     }
   };
@@ -347,6 +357,13 @@ export default function App() {
       useConfigStore.setState({ error: '请先选择 PDF 翻译运行时安装包。' });
       return;
     }
+    setRuntimeImportProgress({
+      stage: 'preparing',
+      message: '正在准备运行时安装包',
+      progress: 0.02,
+      bytesCompleted: 0,
+      bytesTotal: 0,
+    });
     try {
       await importPDFTranslateRuntime(runtimeImportPath.trim());
       setRuntimeImportPath('');
@@ -482,6 +499,7 @@ export default function App() {
                 <PDFTranslateRuntimeCard
                   runtime={snapshot.pdfTranslateRuntime}
                   runtimeImportPath={runtimeImportPath}
+                  runtimeImportProgress={runtimeImportProgress}
                   runtimeAction={runtimeAction}
                   onSelectRuntimePackage={handleSelectRuntimePackage}
                   onImportRuntime={handleImportRuntime}
@@ -571,6 +589,7 @@ export default function App() {
 interface PDFTranslateRuntimeCardProps {
   runtime: PDFTranslateRuntimeConfig;
   runtimeImportPath: string;
+  runtimeImportProgress: PDFTranslateRuntimeImportProgress | null;
   runtimeAction: 'idle' | 'importing' | 'removing';
   onSelectRuntimePackage: () => void;
   onImportRuntime: () => void;
@@ -580,12 +599,15 @@ interface PDFTranslateRuntimeCardProps {
 function PDFTranslateRuntimeCard({
   runtime,
   runtimeImportPath,
+  runtimeImportProgress,
   runtimeAction,
   onSelectRuntimePackage,
   onImportRuntime,
   onRemoveRuntime,
 }: PDFTranslateRuntimeCardProps) {
   const statusMeta = getPDFTranslateRuntimeStatusMeta(runtime.status);
+  const importProgressPercent = getRuntimeImportPercent(runtimeImportProgress);
+  const showImportProgress = runtimeAction === 'importing' && runtimeImportProgress !== null;
 
   return (
     <section className="card">
@@ -617,11 +639,28 @@ function PDFTranslateRuntimeCard({
       <label className="field">
         <span>运行时安装包</span>
         <Button variant="outline" onClick={() => void onSelectRuntimePackage()} disabled={runtimeAction !== 'idle'}>
-          Select ZIP Package
+          选择 ZIP 安装包
         </Button>
       </label>
       <p className="field-hint">{runtimeImportPath || '请选择从 release 下载的运行时 zip 包。Wails 桌面环境会把文件路径传给后端。'}</p>
 
+      {showImportProgress ? (
+        <div className="translate-progress">
+          <div className="translate-progress-bar">
+            <div
+              className={`translate-progress-fill ${importProgressPercent <= 0 ? 'translate-progress-fill-indeterminate' : ''}`}
+              style={{ width: `${Math.max(importProgressPercent <= 0 ? 28 : 4, Math.min(100, importProgressPercent))}%` }}
+            />
+          </div>
+          <div className="translate-progress-meta">
+            <span>{runtimeImportProgress!.message}</span>
+            <span>{importProgressPercent.toFixed(1)}%</span>
+            {runtimeImportProgress!.bytesTotal > 0 ? (
+              <span>{`${formatByteCount(runtimeImportProgress!.bytesCompleted)} / ${formatByteCount(runtimeImportProgress!.bytesTotal)}`}</span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="row-actions">
         <Button onClick={() => void onImportRuntime()} disabled={runtimeAction !== 'idle' || !runtimeImportPath.trim()}>
           {runtimeAction === 'importing' ? '导入中...' : '导入运行时'}
@@ -673,6 +712,30 @@ function getPDFTranslateRuntimeStatusMeta(status: PDFTranslateRuntimeConfig['sta
         description: '当前还没有导入 PDF 翻译运行时，保留格式翻译会被禁用。',
       };
   }
+}
+
+function getRuntimeImportPercent(progress: PDFTranslateRuntimeImportProgress | null) {
+  if (!progress) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(progress.progress * 1000) / 10));
+}
+
+function formatByteCount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 interface LLMConfigCardProps {

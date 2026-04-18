@@ -69,18 +69,26 @@ func (a *App) GetPDFTranslateRuntimeStatus() (PDFTranslateRuntimeConfig, error) 
 }
 
 func (a *App) ImportPDFTranslateRuntime(packagePath string) (PDFTranslateRuntimeImportResult, error) {
+	progress := newRuntimeImportProgressEmitter(a.ctx)
 	if a.store == nil {
-		return PDFTranslateRuntimeImportResult{}, fmt.Errorf("config store is unavailable")
+		progress.Fail("配置存储不可用")
+		return PDFTranslateRuntimeImportResult{}, fmt.Errorf("配置存储不可用")
 	}
-	config, err := importPDFTranslateRuntimePackage(a.paths, packagePath)
+	progress.Emit("preparing", "正在准备运行时安装包", 0.02, 0, 0)
+	config, err := importPDFTranslateRuntimePackage(a.paths, packagePath, progress)
 	if err != nil {
+		progress.Fail(err.Error())
 		return PDFTranslateRuntimeImportResult{}, err
 	}
+	progress.Emit("saving", "正在保存运行时配置", 0.96, 0, 0)
 	saved, err := a.store.SavePDFTranslateRuntimeConfig(a.ctx, config)
 	if err != nil {
+		progress.Fail(err.Error())
 		return PDFTranslateRuntimeImportResult{}, err
 	}
+	progress.Emit("finalizing", "正在重新加载翻译运行时", 0.99, 0, 0)
 	a.translator = newPDFTranslateManagerOrPanic(a.paths, a.store, a.ctx)
+	progress.Emit("completed", "运行时导入完成", 1, 0, 0)
 	return PDFTranslateRuntimeImportResult{Runtime: saved}, nil
 }
 

@@ -9,20 +9,20 @@ import (
 
 func (a *App) SelectPDFTranslateRuntimePackage() (string, error) {
 	if a.ctx == nil {
-		return "", fmt.Errorf("application context is unavailable")
+		return "", fmt.Errorf("应用上下文不可用")
 	}
 
 	selectedPath, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title: "Select PDF translation runtime package",
+		Title: "选择 PDF 翻译运行时安装包",
 		Filters: []wruntime.FileFilter{
 			{
-				DisplayName: "ZIP Archives (*.zip)",
+				DisplayName: "ZIP 压缩包 (*.zip)",
 				Pattern:     "*.zip",
 			},
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("open runtime package dialog: %w", err)
+		return "", fmt.Errorf("打开运行时安装包选择窗口失败: %w", err)
 	}
 
 	return strings.TrimSpace(selectedPath), nil

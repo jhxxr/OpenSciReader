@@ -127,6 +127,7 @@ func (m *Manager) runWorker(ctx context.Context, request workerRequest, onEvent 
 	args = append(args, workerScript)
 
 	cmd := exec.CommandContext(ctx, pythonCmd.Command, args...)
+	configureWorkerProcess(cmd)
 	cmd.Dir = request.WorkingDir
 	workerHomeDir := strings.TrimSpace(request.WorkerHomeDir)
 	if workerHomeDir == "" {

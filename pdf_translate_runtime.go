@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"OpenSciReader/internal/translator"
 
@@ -197,7 +198,7 @@ func validateStoredPDFTranslateRuntimeConfig(input PDFTranslateRuntimeConfig) PD
 	return config
 }
 
-func importPDFTranslateRuntimePackage(paths appPaths, packagePath string) (PDFTranslateRuntimeConfig, error) {
+func importPDFTranslateRuntimePackage(paths appPaths, packagePath string, progress *runtimeImportProgressEmitter) (PDFTranslateRuntimeConfig, error) {
 	packagePath = strings.TrimSpace(packagePath)
 	if packagePath == "" {
 		return PDFTranslateRuntimeConfig{}, fmt.Errorf("runtime package path is required")
@@ -212,10 +213,11 @@ func importPDFTranslateRuntimePackage(paths appPaths, packagePath string) (PDFTr
 	}
 	defer os.RemoveAll(stagingDir)
 
-	if err := extractZip(packagePath, stagingDir); err != nil {
+	if err := extractZip(packagePath, stagingDir, progress); err != nil {
 		return PDFTranslateRuntimeConfig{}, err
 	}
 
+	progress.Emit("validating", "正在校验运行时安装包", 0.88, 0, 0)
 	runtimeRoot, manifest, err := detectImportedPDFTranslateRuntime(stagingDir)
 	if err != nil {
 		return PDFTranslateRuntimeConfig{}, err
@@ -227,6 +229,7 @@ func importPDFTranslateRuntimePackage(paths appPaths, packagePath string) (PDFTr
 		return PDFTranslateRuntimeConfig{}, fmt.Errorf("runtime platform %s is not supported by this build", manifest.Platform)
 	}
 
+	progress.Emit("activating", "正在启用导入的运行时", 0.93, 0, 0)
 	targetDir := filepath.Join(paths.TranslateRuntimeRootDir, sanitizeRuntimeVersion(manifest.Version))
 	if err := os.RemoveAll(targetDir); err != nil {
 		return PDFTranslateRuntimeConfig{}, fmt.Errorf("remove existing runtime directory: %w", err)
@@ -238,6 +241,7 @@ func importPDFTranslateRuntimePackage(paths appPaths, packagePath string) (PDFTr
 		return PDFTranslateRuntimeConfig{}, fmt.Errorf("activate imported runtime: %w", err)
 	}
 
+	progress.Emit("validating", "正在校验导入后的运行时", 0.95, 0, 0)
 	config := validateStoredPDFTranslateRuntimeConfig(PDFTranslateRuntimeConfig{
 		Installed:      true,
 		Status:         PDFTranslateRuntimeStatusInstalling,
@@ -284,13 +288,42 @@ func detectImportedPDFTranslateRuntime(root string) (string, pdfTranslateRuntime
 	return runtimeRoot, manifest, nil
 }
 
-func extractZip(zipPath, destDir string) error {
+func extractZip(zipPath, destDir string, progress *runtimeImportProgressEmitter) error {
 	archive, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("open runtime package: %w", err)
 	}
 	defer archive.Close()
 
+	totalBytes := int64(0)
+	for _, file := range archive.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		totalBytes += zipEntryUncompressedSize(file)
+	}
+
+	completedBytes := int64(0)
+	lastProgressEmit := time.Time{}
+	emitExtractProgress := func(force bool) {
+		if progress == nil {
+			return
+		}
+		now := time.Now()
+		if !force && !lastProgressEmit.IsZero() && now.Sub(lastProgressEmit) < 120*time.Millisecond {
+			return
+		}
+		lastProgressEmit = now
+		progress.Emit(
+			"extracting",
+			"正在解压运行时文件",
+			runtimeImportExtractionProgress(completedBytes, totalBytes),
+			completedBytes,
+			totalBytes,
+		)
+	}
+
+	emitExtractProgress(true)
 	for _, file := range archive.File {
 		targetPath := filepath.Join(destDir, file.Name)
 		cleanTarget := filepath.Clean(targetPath)
@@ -315,15 +348,63 @@ func extractZip(zipPath, destDir string) error {
 			src.Close()
 			return fmt.Errorf("create extracted file %s: %w", cleanTarget, err)
 		}
-		if _, err := io.Copy(dst, src); err != nil {
-			dst.Close()
-			src.Close()
-			return fmt.Errorf("extract file %s: %w", cleanTarget, err)
+
+		buffer := make([]byte, 32*1024)
+		for {
+			bytesRead, readErr := src.Read(buffer)
+			if bytesRead > 0 {
+				if _, err := dst.Write(buffer[:bytesRead]); err != nil {
+					dst.Close()
+					src.Close()
+					return fmt.Errorf("extract file %s: %w", cleanTarget, err)
+				}
+				completedBytes += int64(bytesRead)
+				emitExtractProgress(false)
+			}
+			if readErr == nil {
+				continue
+			}
+			if readErr != io.EOF {
+				dst.Close()
+				src.Close()
+				return fmt.Errorf("extract file %s: %w", cleanTarget, readErr)
+			}
+			break
 		}
 		dst.Close()
 		src.Close()
+		emitExtractProgress(true)
 	}
 	return nil
+}
+
+func runtimeImportExtractionProgress(completedBytes, totalBytes int64) float64 {
+	const (
+		extractStart = 0.08
+		extractEnd   = 0.82
+	)
+
+	if totalBytes <= 0 {
+		return extractStart
+	}
+	ratio := float64(completedBytes) / float64(totalBytes)
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	return extractStart + (extractEnd-extractStart)*ratio
+}
+
+func zipEntryUncompressedSize(file *zip.File) int64 {
+	if file == nil {
+		return 0
+	}
+	if file.UncompressedSize64 > uint64(^uint64(0)>>1) {
+		return int64(^uint64(0) >> 1)
+	}
+	return int64(file.UncompressedSize64)
 }
 
 func findFileByName(root, name string) (string, error) {
