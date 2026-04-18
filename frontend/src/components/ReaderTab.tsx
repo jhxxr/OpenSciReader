@@ -248,7 +248,7 @@ export function ReaderTab({
       };
     }
 
-    void notesApi.listReaderNotes(tab.id).then((entries) => {
+    void notesApi.listReaderNotes(tab.workspaceId ?? "", tab.documentId ?? "", tab.id).then((entries) => {
       if (!cancelled) {
         setNotes(entries);
       }
@@ -281,6 +281,7 @@ export function ReaderTab({
         }
         const relatedJobs = jobs.filter(
           (job) =>
+            (tab.documentId && job.itemId === tab.documentId) ||
             (tab.id && job.itemId === tab.id) ||
             (tab.pdfPath && job.pdfPath === tab.pdfPath),
         );
@@ -367,7 +368,11 @@ export function ReaderTab({
       null,
     [currentFigureCaptures, snapshot?.dataUrl],
   );
-  const currentItemNotes = notes.filter((note) => note.itemId === tab.id);
+  const currentItemNotes = notes.filter(
+    (note) =>
+      (tab.documentId && note.documentId === tab.documentId) ||
+      (!tab.documentId && note.itemId === tab.id),
+  );
   const translatedPageMap = useMemo(
     () => buildPDFTranslatedPageMap(previewJob),
     [previewJob],
@@ -413,6 +418,8 @@ export function ReaderTab({
 
     void notesApi
       .saveReaderNote({
+        workspaceId: tab.workspaceId ?? "",
+        documentId: tab.documentId ?? "",
         itemId: tab.id,
         itemTitle: tab.title,
         page: activePage,

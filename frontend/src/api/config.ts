@@ -22,8 +22,9 @@ import {
 
 interface WailsApp {
   GetConfigSnapshot: () => Promise<ConfigSnapshot>;
-  GetAIWorkspaceConfig: () => Promise<AIWorkspaceConfig>;
+  GetAIWorkspaceConfig: (workspaceId: string) => Promise<AIWorkspaceConfig>;
   SaveAIWorkspaceConfig: (
+    workspaceId: string,
     input: AIWorkspaceConfig,
   ) => Promise<AIWorkspaceConfig>;
   GetPDFTranslateRuntimeStatus: () => Promise<PDFTranslateRuntimeConfig>;
@@ -164,7 +165,7 @@ function buildMockDiscoveredModels(provider: ProviderRecord): DiscoveredModel[] 
 
 function createMockApp(): WailsApp {
   let snapshot = createMockSnapshot();
-  let aiWorkspaceConfig = createMockAIWorkspaceConfig();
+  const aiWorkspaceConfigs = new Map<string, AIWorkspaceConfig>([["workspace-demo", createMockAIWorkspaceConfig()]]);
   let nextProviderId = 4;
   let nextModelId = 3;
 
@@ -173,14 +174,15 @@ function createMockApp(): WailsApp {
       await delay(120);
       return snapshot;
     },
-    GetAIWorkspaceConfig: async () => {
+    GetAIWorkspaceConfig: async (workspaceId) => {
       await delay(80);
-      return aiWorkspaceConfig;
+      return aiWorkspaceConfigs.get(workspaceId) ?? createMockAIWorkspaceConfig();
     },
-    SaveAIWorkspaceConfig: async (input) => {
+    SaveAIWorkspaceConfig: async (workspaceId, input) => {
       await delay(80);
-      aiWorkspaceConfig = { ...input };
-      return aiWorkspaceConfig;
+      const next = { ...input };
+      aiWorkspaceConfigs.set(workspaceId, next);
+      return next;
     },
     GetPDFTranslateRuntimeStatus: async () => {
       await delay(80);
@@ -353,11 +355,11 @@ export const configApi = {
   getConfigSnapshot(): Promise<ConfigSnapshot> {
     return app.GetConfigSnapshot();
   },
-  getAIWorkspaceConfig(): Promise<AIWorkspaceConfig> {
-    return app.GetAIWorkspaceConfig();
+  getAIWorkspaceConfig(workspaceId: string): Promise<AIWorkspaceConfig> {
+    return app.GetAIWorkspaceConfig(workspaceId);
   },
-  saveAIWorkspaceConfig(input: AIWorkspaceConfig): Promise<AIWorkspaceConfig> {
-    return app.SaveAIWorkspaceConfig(input);
+  saveAIWorkspaceConfig(workspaceId: string, input: AIWorkspaceConfig): Promise<AIWorkspaceConfig> {
+    return app.SaveAIWorkspaceConfig(workspaceId, input);
   },
   getPDFTranslateRuntimeStatus(): Promise<PDFTranslateRuntimeConfig> {
     return app.GetPDFTranslateRuntimeStatus();

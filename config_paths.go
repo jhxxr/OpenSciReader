@@ -17,6 +17,8 @@ type appPaths struct {
 	TranslateJobsDir         string
 	TranslateRuntimeRootDir  string
 	TranslateRuntimeCacheDir string
+	LibraryRootDir           string
+	WorkspacesRootDir        string
 }
 
 func resolveAppPaths() (appPaths, error) {
@@ -35,9 +37,11 @@ func resolveAppPaths() (appPaths, error) {
 		TranslateJobsDir:         filepath.Join(rootDir, "reader_translate", "jobs"),
 		TranslateRuntimeRootDir:  filepath.Join(rootDir, "reader_translate", "runtime"),
 		TranslateRuntimeCacheDir: filepath.Join(rootDir, "reader_translate", "runtime-cache"),
+		LibraryRootDir:           filepath.Join(rootDir, "library"),
+		WorkspacesRootDir:        filepath.Join(rootDir, "library", "workspaces"),
 	}
 
-	for _, directory := range []string{paths.RootDir, paths.TranslateJobsDir, paths.TranslateRuntimeRootDir, paths.TranslateRuntimeCacheDir} {
+	for _, directory := range []string{paths.RootDir, paths.TranslateJobsDir, paths.TranslateRuntimeRootDir, paths.TranslateRuntimeCacheDir, paths.LibraryRootDir, paths.WorkspacesRootDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return appPaths{}, fmt.Errorf("create app data directory %s: %w", directory, err)
 		}

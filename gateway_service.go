@@ -319,8 +319,8 @@ func emitGatewayEvent(ctx context.Context, eventName string, payload gatewayStre
 	wruntime.EventsEmit(ctx, eventName, payload)
 }
 
-func (g *gatewayService) GenerateResearchFigure(ctx context.Context, _, _ int64, prompt string, contextData GatewayContextData) (FigureGenerationResult, error) {
-	workspaceConfig, err := g.store.GetAIWorkspaceConfig(ctx)
+func (g *gatewayService) GenerateResearchFigure(ctx context.Context, _, _ int64, prompt string, contextData GatewayContextData, workspaceID string) (FigureGenerationResult, error) {
+	workspaceConfig, err := g.store.GetAIWorkspaceConfig(ctx, workspaceID)
 	if err != nil {
 		return FigureGenerationResult{}, err
 	}

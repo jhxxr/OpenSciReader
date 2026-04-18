@@ -82,6 +82,88 @@ type ConfigSnapshot struct {
 	PDFTranslateRuntime PDFTranslateRuntimeConfig `json:"pdfTranslateRuntime"`
 }
 
+type Workspace struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type WorkspaceUpsertInput struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+}
+
+type DocumentRecord struct {
+	ID                string `json:"id"`
+	WorkspaceID       string `json:"workspaceId"`
+	Title             string `json:"title"`
+	DocumentType      string `json:"documentType"`
+	SourceType        string `json:"sourceType"`
+	DefaultAssetID    string `json:"defaultAssetId"`
+	OriginalFileName  string `json:"originalFileName"`
+	PrimaryPDFPath    string `json:"primaryPdfPath"`
+	ContentHash       string `json:"contentHash"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
+type DocumentAssetRecord struct {
+	ID             string `json:"id"`
+	DocumentID     string `json:"documentId"`
+	WorkspaceID    string `json:"workspaceId"`
+	Kind           string `json:"kind"`
+	Role           string `json:"role"`
+	FileName       string `json:"fileName"`
+	RelativePath   string `json:"relativePath"`
+	AbsolutePath   string `json:"absolutePath"`
+	MimeType       string `json:"mimeType"`
+	ByteSize       int64  `json:"byteSize"`
+	ContentHash    string `json:"contentHash"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+type ImportRecord struct {
+	ID              string `json:"id"`
+	WorkspaceID     string `json:"workspaceId"`
+	DocumentID      string `json:"documentId"`
+	SourceType      string `json:"sourceType"`
+	SourceLabel     string `json:"sourceLabel"`
+	SourceRef       string `json:"sourceRef"`
+	Status          string `json:"status"`
+	Message         string `json:"message"`
+	CreatedAt       string `json:"createdAt"`
+}
+
+type DocumentExternalLink struct {
+	ID             string `json:"id"`
+	DocumentID     string `json:"documentId"`
+	WorkspaceID    string `json:"workspaceId"`
+	Provider       string `json:"provider"`
+	ExternalID     string `json:"externalId"`
+	ExternalKey    string `json:"externalKey"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+type ImportFilesInput struct {
+	WorkspaceID string   `json:"workspaceId"`
+	FilePaths   []string `json:"filePaths"`
+	SourceType  string   `json:"sourceType"`
+	SourceLabel string   `json:"sourceLabel"`
+	SourceRef   string   `json:"sourceRef"`
+	Title       string   `json:"title"`
+}
+
+type ImportFilesResult struct {
+	Workspace Workspace        `json:"workspace"`
+	Documents []DocumentRecord `json:"documents"`
+	Imports   []ImportRecord   `json:"imports"`
+}
+
 type AIWorkspaceConfig struct {
 	SummaryMode          string `json:"summaryMode"`
 	SummaryChunkPages    int    `json:"summaryChunkPages"`
@@ -125,18 +207,22 @@ type OCRPageResult struct {
 }
 
 type ChatHistoryEntry struct {
-	ID        int64  `json:"id"`
-	ItemID    string `json:"itemId"`
-	ItemTitle string `json:"itemTitle"`
-	Page      int    `json:"page"`
-	Kind      string `json:"kind"`
-	Prompt    string `json:"prompt"`
-	Response  string `json:"response"`
-	CreatedAt string `json:"createdAt"`
+	ID          int64  `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	DocumentID  string `json:"documentId"`
+	ItemID      string `json:"itemId"`
+	ItemTitle   string `json:"itemTitle"`
+	Page        int    `json:"page"`
+	Kind        string `json:"kind"`
+	Prompt      string `json:"prompt"`
+	Response    string `json:"response"`
+	CreatedAt   string `json:"createdAt"`
 }
 
 type ReaderNoteEntry struct {
 	ID         int64  `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	DocumentID  string `json:"documentId"`
 	ItemID     string `json:"itemId"`
 	ItemTitle  string `json:"itemTitle"`
 	Page       int    `json:"page"`

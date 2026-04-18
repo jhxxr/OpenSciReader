@@ -186,11 +186,22 @@ export function ReaderAIPanel({
   );
   const drawingProviderName = drawingProviderConfig?.provider.name ?? "";
 
+  const workspaceID = tab.workspaceId ?? "";
+
   useEffect(() => {
     let cancelled = false;
 
+    if (!workspaceID) {
+      setWorkspaceConfig(DEFAULT_AI_WORKSPACE_CONFIG);
+      setConfigLoaded(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setConfigLoaded(false);
     void configApi
-      .getAIWorkspaceConfig()
+      .getAIWorkspaceConfig(workspaceID)
       .then((config) => {
         if (!cancelled) {
           setWorkspaceConfig(config);
@@ -209,15 +220,15 @@ export function ReaderAIPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceID]);
 
   useEffect(() => {
-    if (!configLoaded) {
+    if (!configLoaded || !workspaceID) {
       return undefined;
     }
 
     const timer = window.setTimeout(() => {
-      void configApi.saveAIWorkspaceConfig(workspaceConfig).catch((error) => {
+      void configApi.saveAIWorkspaceConfig(workspaceID, workspaceConfig).catch((error) => {
         setPanelError(
           error instanceof Error ? error.message : "保存 AI 配置失败",
         );
@@ -227,7 +238,7 @@ export function ReaderAIPanel({
     return () => {
       window.clearTimeout(timer);
     };
-  }, [configLoaded, workspaceConfig]);
+  }, [configLoaded, workspaceConfig, workspaceID]);
 
   useEffect(() => {
     if (!drawingConfigs.length) {
@@ -263,7 +274,7 @@ export function ReaderAIPanel({
     }
 
     void historyApi
-      .listChatHistory(tab.id)
+      .listChatHistory(tab.workspaceId ?? "", tab.documentId ?? "", tab.id)
       .then((entries) => {
         if (!cancelled) {
           setChatHistory(entries);
@@ -287,7 +298,7 @@ export function ReaderAIPanel({
       return;
     }
 
-    const hydrationKey = `${tab.id}:${workspaceConfig.autoRestoreCount}`;
+    const hydrationKey = `${tab.workspaceId ?? ""}:${tab.documentId ?? tab.id}:${workspaceConfig.autoRestoreCount}`;
     if (hydratedHistoryKeyRef.current === hydrationKey) {
       return;
     }
@@ -317,7 +328,7 @@ export function ReaderAIPanel({
       current.length ? current : restoredPairs,
     );
     hydratedHistoryKeyRef.current = hydrationKey;
-  }, [chatHistory, tab.id, workspaceConfig.autoRestoreCount]);
+  }, [chatHistory, tab.workspaceId, tab.documentId, tab.id, workspaceConfig.autoRestoreCount]);
 
   useEffect(
     () => () => {
@@ -875,6 +886,7 @@ ${item.summary}`,
           itemTitle: tab.title ?? "",
           citeKey: tab.citeKey ?? "",
         },
+        workspaceID,
       );
 
       setGeneratedFigure(result.dataUrl);
@@ -894,6 +906,8 @@ ${item.summary}`,
     }
 
     const entry = await historyApi.saveChatHistory({
+      workspaceId: tab.workspaceId ?? "",
+      documentId: tab.documentId ?? "",
       itemId: tab.id,
       itemTitle: tab.title,
       page: activePage,
@@ -1404,7 +1418,13 @@ ${item.summary}`,
               variant="secondary"
               size="sm"
               onClick={() =>
-                void refreshHistory(tab.id, setChatHistory, setPanelError)
+                void refreshHistory(
+                  tab.workspaceId ?? "",
+                  tab.documentId ?? "",
+                  tab.id,
+                  setChatHistory,
+                  setPanelError,
+                )
               }
               disabled={!tab.id}
             >
@@ -1564,17 +1584,19 @@ function historyEntryToResult(entry: ChatHistoryEntry): AIResult {
 }
 
 async function refreshHistory(
+  workspaceID: string,
+  documentID: string,
   itemID: string,
   setChatHistory: (value: ChatHistoryEntry[]) => void,
   setPanelError: (value: string | null) => void,
 ) {
-  if (!itemID) {
+  if (!itemID && !documentID) {
     return;
   }
 
   try {
     setPanelError(null);
-    setChatHistory(await historyApi.listChatHistory(itemID));
+    setChatHistory(await historyApi.listChatHistory(workspaceID, documentID, itemID));
   } catch (error) {
     setPanelError(error instanceof Error ? error.message : "刷新历史失败");
   }

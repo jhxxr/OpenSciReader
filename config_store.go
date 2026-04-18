@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,8 +88,78 @@ func (s *configStore) bootstrap() error {
 			context_window INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS workspaces (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			color TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS documents (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			document_type TEXT NOT NULL DEFAULT 'paper',
+			source_type TEXT NOT NULL DEFAULT 'manual',
+			default_asset_id TEXT NOT NULL DEFAULT '',
+			original_file_name TEXT NOT NULL DEFAULT '',
+			primary_pdf_path TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS document_assets (
+			id TEXT PRIMARY KEY,
+			document_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT '',
+			file_name TEXT NOT NULL,
+			relative_path TEXT NOT NULL,
+			absolute_path TEXT NOT NULL,
+			mime_type TEXT NOT NULL DEFAULT '',
+			byte_size INTEGER NOT NULL DEFAULT 0,
+			content_hash TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS import_records (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			document_id TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			source_label TEXT NOT NULL DEFAULT '',
+			source_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'completed',
+			message TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+			FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS document_external_links (
+			id TEXT PRIMARY KEY,
+			document_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			external_id TEXT NOT NULL DEFAULT '',
+			external_key TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS workspace_ai_configs (
+			workspace_id TEXT PRIMARY KEY,
+			config_json TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
 		`CREATE TABLE IF NOT EXISTS ai_chat_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT '',
+			document_id TEXT NOT NULL DEFAULT '',
 			item_id TEXT NOT NULL,
 			item_title TEXT NOT NULL,
 			page INTEGER NOT NULL DEFAULT 1,
@@ -94,6 +170,8 @@ func (s *configStore) bootstrap() error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS reader_notes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT '',
+			document_id TEXT NOT NULL DEFAULT '',
 			item_id TEXT NOT NULL,
 			item_title TEXT NOT NULL,
 			page INTEGER NOT NULL DEFAULT 1,
@@ -123,6 +201,9 @@ func (s *configStore) bootstrap() error {
 		}
 	}
 	if err := s.ensureProvidersRegionColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureHistoryDocumentColumns(); err != nil {
 		return err
 	}
 	if err := s.migrateLegacyEncryptedProviderSecrets(); err != nil {
@@ -691,12 +772,400 @@ func (s *configStore) SavePDFMarkdownCache(ctx context.Context, record pdfMarkdo
 	return payload, nil
 }
 
+func (s *configStore) CreateWorkspace(ctx context.Context, input WorkspaceUpsertInput) (Workspace, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Workspace{}, fmt.Errorf("workspace name is required")
+	}
+
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		id = newEntityID("ws")
+	}
+	createdAt := nowRFC3339()
+	workspace := Workspace{
+		ID:          id,
+		Name:        name,
+		Description: strings.TrimSpace(input.Description),
+		Color:       strings.TrimSpace(input.Color),
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO workspaces (id, name, description, color, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?);
+	`, workspace.ID, workspace.Name, workspace.Description, workspace.Color, workspace.CreatedAt, workspace.UpdatedAt); err != nil {
+		return Workspace{}, fmt.Errorf("create workspace: %w", err)
+	}
+
+	return workspace, nil
+}
+
+func (s *configStore) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, name, description, color, created_at, updated_at
+		FROM workspaces
+		ORDER BY updated_at DESC, created_at DESC, id DESC;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list workspaces: %w", err)
+	}
+	defer rows.Close()
+
+	workspaces := []Workspace{}
+	for rows.Next() {
+		var workspace Workspace
+		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Description, &workspace.Color, &workspace.CreatedAt, &workspace.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan workspace: %w", err)
+		}
+		workspaces = append(workspaces, workspace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspaces: %w", err)
+	}
+	return workspaces, nil
+}
+
+func (s *configStore) GetWorkspace(ctx context.Context, workspaceID string) (Workspace, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT id, name, description, color, created_at, updated_at
+		FROM workspaces
+		WHERE id = ?;
+	`, strings.TrimSpace(workspaceID))
+
+	var workspace Workspace
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Description, &workspace.Color, &workspace.CreatedAt, &workspace.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Workspace{}, fmt.Errorf("workspace %s not found", strings.TrimSpace(workspaceID))
+		}
+		return Workspace{}, fmt.Errorf("load workspace: %w", err)
+	}
+	return workspace, nil
+}
+
+func (s *configStore) ListDocumentsByWorkspace(ctx context.Context, workspaceID string) ([]DocumentRecord, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, workspace_id, title, document_type, source_type, default_asset_id, original_file_name, primary_pdf_path, content_hash, created_at, updated_at
+		FROM documents
+		WHERE workspace_id = ?
+		ORDER BY updated_at DESC, created_at DESC, id DESC;
+	`, strings.TrimSpace(workspaceID))
+	if err != nil {
+		return nil, fmt.Errorf("list documents: %w", err)
+	}
+	defer rows.Close()
+
+	documents := []DocumentRecord{}
+	for rows.Next() {
+		var document DocumentRecord
+		if err := rows.Scan(
+			&document.ID,
+			&document.WorkspaceID,
+			&document.Title,
+			&document.DocumentType,
+			&document.SourceType,
+			&document.DefaultAssetID,
+			&document.OriginalFileName,
+			&document.PrimaryPDFPath,
+			&document.ContentHash,
+			&document.CreatedAt,
+			&document.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan document: %w", err)
+		}
+		documents = append(documents, document)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate documents: %w", err)
+	}
+	return documents, nil
+}
+
+func (s *configStore) ImportFiles(ctx context.Context, paths appPaths, input ImportFilesInput) (ImportFilesResult, error) {
+	workspace, err := s.GetWorkspace(ctx, input.WorkspaceID)
+	if err != nil {
+		return ImportFilesResult{}, err
+	}
+	if len(input.FilePaths) == 0 {
+		return ImportFilesResult{}, fmt.Errorf("at least one file path is required")
+	}
+
+	workspaceRoot := filepath.Join(paths.WorkspacesRootDir, workspace.ID)
+	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
+		return ImportFilesResult{}, fmt.Errorf("create workspace root: %w", err)
+	}
+
+	result := ImportFilesResult{Workspace: workspace}
+	sourceType := strings.TrimSpace(input.SourceType)
+	if sourceType == "" {
+		sourceType = "manual"
+	}
+	sourceLabel := strings.TrimSpace(input.SourceLabel)
+	sourceRef := strings.TrimSpace(input.SourceRef)
+	for _, rawPath := range input.FilePaths {
+		importedDocument, importRecord, err := s.importSingleFile(ctx, paths, workspace, rawPath, sourceType, sourceLabel, sourceRef, input.Title)
+		if err != nil {
+			return ImportFilesResult{}, err
+		}
+		result.Documents = append(result.Documents, importedDocument)
+		result.Imports = append(result.Imports, importRecord)
+	}
+
+	return result, nil
+}
+
+func (s *configStore) importSingleFile(ctx context.Context, paths appPaths, workspace Workspace, rawPath, sourceType, sourceLabel, sourceRef, preferredTitle string) (DocumentRecord, ImportRecord, error) {
+	filePath := filepath.Clean(strings.TrimSpace(rawPath))
+	if filePath == "" {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("file path is required")
+	}
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("stat import file %s: %w", filePath, err)
+	}
+	if info.IsDir() {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("import file %s is a directory", filePath)
+	}
+
+	contentHash, err := sha256File(filePath)
+	if err != nil {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("hash import file %s: %w", filePath, err)
+	}
+
+	title := strings.TrimSpace(preferredTitle)
+	if title == "" {
+		title = strings.TrimSuffix(info.Name(), filepath.Ext(info.Name()))
+	}
+	documentID := newEntityID("doc")
+	assetID := newEntityID("asset")
+	importID := newEntityID("import")
+	createdAt := nowRFC3339()
+	assetFileName := sanitizeFileName(info.Name())
+	assetRelativePath := filepath.Join("library", "workspaces", workspace.ID, "documents", documentID, "assets", "original", assetFileName)
+	assetAbsolutePath := filepath.Join(paths.RootDir, assetRelativePath)
+	assetDir := filepath.Dir(assetAbsolutePath)
+	if err := os.MkdirAll(assetDir, 0o700); err != nil {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("create asset directory: %w", err)
+	}
+	if err := copyFile(filePath, assetAbsolutePath); err != nil {
+		return DocumentRecord{}, ImportRecord{}, fmt.Errorf("copy import file: %w", err)
+	}
+
+	document := DocumentRecord{
+		ID:               documentID,
+		WorkspaceID:      workspace.ID,
+		Title:            title,
+		DocumentType:     "paper",
+		SourceType:       sourceType,
+		DefaultAssetID:   assetID,
+		OriginalFileName: info.Name(),
+		PrimaryPDFPath:   assetAbsolutePath,
+		ContentHash:      contentHash,
+		CreatedAt:        createdAt,
+		UpdatedAt:        createdAt,
+	}
+	asset := DocumentAssetRecord{
+		ID:           assetID,
+		DocumentID:   documentID,
+		WorkspaceID:  workspace.ID,
+		Kind:         detectAssetKind(info.Name()),
+		Role:         "original",
+		FileName:     assetFileName,
+		RelativePath: filepath.ToSlash(assetRelativePath),
+		AbsolutePath: assetAbsolutePath,
+		MimeType:     detectMimeType(info.Name()),
+		ByteSize:     info.Size(),
+		ContentHash:  contentHash,
+		CreatedAt:    createdAt,
+	}
+	importRecord := ImportRecord{
+		ID:          importID,
+		WorkspaceID: workspace.ID,
+		DocumentID:  documentID,
+		SourceType:  sourceType,
+		SourceLabel: firstNonEmpty(sourceLabel, sourceType),
+		SourceRef:   firstNonEmpty(sourceRef, filePath),
+		Status:      "completed",
+		Message:     "",
+		CreatedAt:   createdAt,
+	}
+
+	if err := s.saveImportedDocument(ctx, workspace.ID, document, asset, importRecord); err != nil {
+		return DocumentRecord{}, ImportRecord{}, err
+	}
+	if sourceType == "zotero" {
+		link := DocumentExternalLink{
+			ID:          newEntityID("link"),
+			DocumentID:  document.ID,
+			WorkspaceID: workspace.ID,
+			Provider:    "zotero",
+			ExternalID:  strings.TrimSpace(sourceRef),
+			ExternalKey: strings.TrimSpace(sourceLabel),
+			CreatedAt:   createdAt,
+		}
+		if err := s.saveDocumentExternalLink(ctx, link); err != nil {
+			return DocumentRecord{}, ImportRecord{}, err
+		}
+	}
+	if err := s.touchWorkspace(ctx, workspace.ID, createdAt); err != nil {
+		return DocumentRecord{}, ImportRecord{}, err
+	}
+
+	return document, importRecord, nil
+}
+
+func (s *configStore) saveImportedDocument(ctx context.Context, workspaceID string, document DocumentRecord, asset DocumentAssetRecord, importRecord ImportRecord) error {
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin import transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO documents (id, workspace_id, title, document_type, source_type, default_asset_id, original_file_name, primary_pdf_path, content_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, document.ID, document.WorkspaceID, document.Title, document.DocumentType, document.SourceType, document.DefaultAssetID, document.OriginalFileName, document.PrimaryPDFPath, document.ContentHash, document.CreatedAt, document.UpdatedAt); err != nil {
+		return fmt.Errorf("save document: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO document_assets (id, document_id, workspace_id, kind, role, file_name, relative_path, absolute_path, mime_type, byte_size, content_hash, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, asset.ID, asset.DocumentID, asset.WorkspaceID, asset.Kind, asset.Role, asset.FileName, asset.RelativePath, asset.AbsolutePath, asset.MimeType, asset.ByteSize, asset.ContentHash, asset.CreatedAt); err != nil {
+		return fmt.Errorf("save document asset: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO import_records (id, workspace_id, document_id, source_type, source_label, source_ref, status, message, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, importRecord.ID, importRecord.WorkspaceID, importRecord.DocumentID, importRecord.SourceType, importRecord.SourceLabel, importRecord.SourceRef, importRecord.Status, importRecord.Message, importRecord.CreatedAt); err != nil {
+		return fmt.Errorf("save import record: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE workspaces
+		SET updated_at = ?
+		WHERE id = ?;
+	`, document.UpdatedAt, workspaceID); err != nil {
+		return fmt.Errorf("touch workspace: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit import transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) saveDocumentExternalLink(ctx context.Context, link DocumentExternalLink) error {
+	if strings.TrimSpace(link.DocumentID) == "" || strings.TrimSpace(link.WorkspaceID) == "" || strings.TrimSpace(link.Provider) == "" {
+		return fmt.Errorf("document external link is incomplete")
+	}
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO document_external_links (id, document_id, workspace_id, provider, external_id, external_key, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?);
+	`, link.ID, link.DocumentID, link.WorkspaceID, link.Provider, link.ExternalID, link.ExternalKey, link.CreatedAt); err != nil {
+		return fmt.Errorf("save document external link: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) touchWorkspace(ctx context.Context, workspaceID, updatedAt string) error {
+	if _, err := s.appDB.ExecContext(ctx, `
+		UPDATE workspaces
+		SET updated_at = ?
+		WHERE id = ?;
+	`, updatedAt, strings.TrimSpace(workspaceID)); err != nil {
+		return fmt.Errorf("touch workspace: %w", err)
+	}
+	return nil
+}
+
+func newEntityID(prefix string) string {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(bytes))
+}
+
+func sha256File(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+	return dstFile.Close()
+}
+
+func sanitizeFileName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "document.pdf"
+	}
+	replacer := strings.NewReplacer("<", "_", ">", "_", ":", "_", `"`, "_", "/", "_", `\\`, "_", "|", "_", "?", "_", "*", "_")
+	return replacer.Replace(trimmed)
+}
+
+func detectAssetKind(fileName string) string {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	switch ext {
+	case ".pdf":
+		return "pdf"
+	case ".md", ".markdown":
+		return "markdown"
+	default:
+		return "file"
+	}
+}
+
+func detectMimeType(fileName string) string {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	switch ext {
+	case ".pdf":
+		return "application/pdf"
+	case ".md", ".markdown":
+		return "text/markdown"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 func (s *configStore) SaveChatHistory(ctx context.Context, entry ChatHistoryEntry) (ChatHistoryEntry, error) {
 	createdAt := nowRFC3339()
 	result, err := s.appDB.ExecContext(ctx, `
-		INSERT INTO ai_chat_history (item_id, item_title, page, kind, prompt, response, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?);
-	`, strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.Kind), strings.TrimSpace(entry.Prompt), strings.TrimSpace(entry.Response), createdAt)
+		INSERT INTO ai_chat_history (workspace_id, document_id, item_id, item_title, page, kind, prompt, response, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, strings.TrimSpace(entry.WorkspaceID), strings.TrimSpace(entry.DocumentID), strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.Kind), strings.TrimSpace(entry.Prompt), strings.TrimSpace(entry.Response), createdAt)
 	if err != nil {
 		return ChatHistoryEntry{}, fmt.Errorf("save chat history: %w", err)
 	}
@@ -709,13 +1178,14 @@ func (s *configStore) SaveChatHistory(ctx context.Context, entry ChatHistoryEntr
 	return entry, nil
 }
 
-func (s *configStore) ListChatHistory(ctx context.Context, itemID string) ([]ChatHistoryEntry, error) {
+func (s *configStore) ListChatHistory(ctx context.Context, workspaceID, documentID, itemID string) ([]ChatHistoryEntry, error) {
 	rows, err := s.appDB.QueryContext(ctx, `
-		SELECT id, item_id, item_title, page, kind, prompt, response, created_at
+		SELECT id, workspace_id, document_id, item_id, item_title, page, kind, prompt, response, created_at
 		FROM ai_chat_history
-		WHERE item_id = ?
+		WHERE (workspace_id = ? AND document_id = ? AND workspace_id <> '' AND document_id <> '')
+		   OR (? <> '' AND item_id = ?)
 		ORDER BY id DESC;
-	`, strings.TrimSpace(itemID))
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(documentID), strings.TrimSpace(itemID), strings.TrimSpace(itemID))
 	if err != nil {
 		return nil, fmt.Errorf("list chat history: %w", err)
 	}
@@ -724,7 +1194,7 @@ func (s *configStore) ListChatHistory(ctx context.Context, itemID string) ([]Cha
 	entries := []ChatHistoryEntry{}
 	for rows.Next() {
 		var entry ChatHistoryEntry
-		if err := rows.Scan(&entry.ID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.Kind, &entry.Prompt, &entry.Response, &entry.CreatedAt); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.WorkspaceID, &entry.DocumentID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.Kind, &entry.Prompt, &entry.Response, &entry.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan chat history: %w", err)
 		}
 		entries = append(entries, entry)
@@ -748,9 +1218,9 @@ func (s *configStore) DeleteChatHistory(ctx context.Context, id int64) error {
 func (s *configStore) SaveReaderNote(ctx context.Context, entry ReaderNoteEntry) (ReaderNoteEntry, error) {
 	createdAt := nowRFC3339()
 	result, err := s.appDB.ExecContext(ctx, `
-		INSERT INTO reader_notes (item_id, item_title, page, anchor_text, content, created_at)
-		VALUES (?, ?, ?, ?, ?, ?);
-	`, strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.AnchorText), strings.TrimSpace(entry.Content), createdAt)
+		INSERT INTO reader_notes (workspace_id, document_id, item_id, item_title, page, anchor_text, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+	`, strings.TrimSpace(entry.WorkspaceID), strings.TrimSpace(entry.DocumentID), strings.TrimSpace(entry.ItemID), strings.TrimSpace(entry.ItemTitle), entry.Page, strings.TrimSpace(entry.AnchorText), strings.TrimSpace(entry.Content), createdAt)
 	if err != nil {
 		return ReaderNoteEntry{}, fmt.Errorf("save reader note: %w", err)
 	}
@@ -763,13 +1233,14 @@ func (s *configStore) SaveReaderNote(ctx context.Context, entry ReaderNoteEntry)
 	return entry, nil
 }
 
-func (s *configStore) ListReaderNotes(ctx context.Context, itemID string) ([]ReaderNoteEntry, error) {
+func (s *configStore) ListReaderNotes(ctx context.Context, workspaceID, documentID, itemID string) ([]ReaderNoteEntry, error) {
 	rows, err := s.appDB.QueryContext(ctx, `
-		SELECT id, item_id, item_title, page, anchor_text, content, created_at
+		SELECT id, workspace_id, document_id, item_id, item_title, page, anchor_text, content, created_at
 		FROM reader_notes
-		WHERE item_id = ?
+		WHERE (workspace_id = ? AND document_id = ? AND workspace_id <> '' AND document_id <> '')
+		   OR (? <> '' AND item_id = ?)
 		ORDER BY id DESC;
-	`, strings.TrimSpace(itemID))
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(documentID), strings.TrimSpace(itemID), strings.TrimSpace(itemID))
 	if err != nil {
 		return nil, fmt.Errorf("list reader notes: %w", err)
 	}
@@ -778,7 +1249,7 @@ func (s *configStore) ListReaderNotes(ctx context.Context, itemID string) ([]Rea
 	entries := []ReaderNoteEntry{}
 	for rows.Next() {
 		var entry ReaderNoteEntry
-		if err := rows.Scan(&entry.ID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.AnchorText, &entry.Content, &entry.CreatedAt); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.WorkspaceID, &entry.DocumentID, &entry.ItemID, &entry.ItemTitle, &entry.Page, &entry.AnchorText, &entry.Content, &entry.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan reader note: %w", err)
 		}
 		entries = append(entries, entry)
@@ -790,7 +1261,6 @@ func (s *configStore) ListReaderNotes(ctx context.Context, itemID string) ([]Rea
 }
 
 const (
-	aiWorkspaceConfigSettingKey      = "ai_workspace_config"
 	pdfTranslateRuntimeSettingKeyDB = pdfTranslateRuntimeSettingKey
 )
 
@@ -861,15 +1331,25 @@ func normalizeAIWorkspaceConfig(input AIWorkspaceConfig) AIWorkspaceConfig {
 	return config
 }
 
-func (s *configStore) GetAIWorkspaceConfig(ctx context.Context) (AIWorkspaceConfig, error) {
+func (s *configStore) GetAIWorkspaceConfig(ctx context.Context, workspaceID string) (AIWorkspaceConfig, error) {
 	config := defaultAIWorkspaceConfig()
-
-	raw, found, err := s.getSettingValue(ctx, aiWorkspaceConfigSettingKey)
-	if err != nil {
-		return AIWorkspaceConfig{}, err
-	}
-	if !found {
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
 		return config, nil
+	}
+
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT config_json
+		FROM workspace_ai_configs
+		WHERE workspace_id = ?;
+	`, trimmedWorkspaceID)
+
+	var raw string
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return config, nil
+		}
+		return AIWorkspaceConfig{}, fmt.Errorf("get workspace ai config: %w", err)
 	}
 
 	var stored AIWorkspaceConfig
@@ -879,14 +1359,28 @@ func (s *configStore) GetAIWorkspaceConfig(ctx context.Context) (AIWorkspaceConf
 	return normalizeAIWorkspaceConfig(stored), nil
 }
 
-func (s *configStore) SaveAIWorkspaceConfig(ctx context.Context, input AIWorkspaceConfig) (AIWorkspaceConfig, error) {
+func (s *configStore) SaveAIWorkspaceConfig(ctx context.Context, workspaceID string, input AIWorkspaceConfig) (AIWorkspaceConfig, error) {
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return AIWorkspaceConfig{}, fmt.Errorf("workspace id is required")
+	}
+	if _, err := s.GetWorkspace(ctx, trimmedWorkspaceID); err != nil {
+		return AIWorkspaceConfig{}, err
+	}
+
 	normalized := normalizeAIWorkspaceConfig(input)
 	encoded, err := json.Marshal(normalized)
 	if err != nil {
 		return AIWorkspaceConfig{}, fmt.Errorf("encode ai workspace config: %w", err)
 	}
 
-	if err := s.saveSettingValue(ctx, aiWorkspaceConfigSettingKey, string(encoded)); err != nil {
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO workspace_ai_configs (workspace_id, config_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(workspace_id) DO UPDATE SET
+			config_json = excluded.config_json,
+			updated_at = excluded.updated_at;
+	`, trimmedWorkspaceID, string(encoded), nowRFC3339()); err != nil {
 		return AIWorkspaceConfig{}, fmt.Errorf("save ai workspace config: %w", err)
 	}
 
@@ -1010,6 +1504,55 @@ func (s *configStore) ensureProvidersRegionColumn() error {
 
 	if _, err := s.appDB.Exec(`ALTER TABLE providers ADD COLUMN region TEXT NOT NULL DEFAULT '';`); err != nil {
 		return fmt.Errorf("add providers.region column: %w", err)
+	}
+	return nil
+}
+
+func (s *configStore) ensureHistoryDocumentColumns() error {
+	for _, tableName := range []string{"ai_chat_history", "reader_notes"} {
+		rows, err := s.appDB.Query(fmt.Sprintf("PRAGMA table_info(%s);", tableName))
+		if err != nil {
+			return fmt.Errorf("inspect %s schema: %w", tableName, err)
+		}
+
+		hasWorkspaceID := false
+		hasDocumentID := false
+		for rows.Next() {
+			var (
+				cid        int
+				name       string
+				colType    string
+				notNull    int
+				defaultV   sql.NullString
+				primaryKey int
+			)
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primaryKey); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan %s schema: %w", tableName, err)
+			}
+			if strings.EqualFold(name, "workspace_id") {
+				hasWorkspaceID = true
+			}
+			if strings.EqualFold(name, "document_id") {
+				hasDocumentID = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate %s schema: %w", tableName, err)
+		}
+		_ = rows.Close()
+
+		if !hasWorkspaceID {
+			if _, err := s.appDB.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '';", tableName)); err != nil {
+				return fmt.Errorf("add %s.workspace_id column: %w", tableName, err)
+			}
+		}
+		if !hasDocumentID {
+			if _, err := s.appDB.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN document_id TEXT NOT NULL DEFAULT '';", tableName)); err != nil {
+				return fmt.Errorf("add %s.document_id column: %w", tableName, err)
+			}
+		}
 	}
 	return nil
 }

@@ -21,13 +21,17 @@ import { Button } from './ui/Button';
 import type { PDFTranslateJobSnapshot } from '../types/pdfTranslate';
 import type { CollectionTree } from '../types/zotero';
 import type { ZoteroState } from '../store/zoteroStore';
+import type { WorkspaceState } from '../store/workspaceStore';
 
 interface HomePageProps {
   zotero: ZoteroState;
-  onOpenPdf: (item: { id: string; title: string; pdfPath: string | null; itemType?: string; citeKey?: string }) => void;
+  workspace: WorkspaceState;
+  onImportFiles: () => Promise<void>;
+  onImportZoteroItem: (item: { id: string; title: string; pdfPath: string; citeKey: string }) => Promise<void>;
+  onOpenPdf: (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => void;
 }
 
-export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
+export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem, onOpenPdf }: HomePageProps) {
   const [jobs, setJobs] = useState<PDFTranslateJobSnapshot[]>([]);
   const [jobError, setJobError] = useState<string | null>(null);
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
@@ -135,7 +139,46 @@ export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
   return (
     <div className="home-page">
       <div className="home-body">
-        <h2 className="home-section-title">文献库</h2>
+        <h2 className="home-section-title">工作区</h2>
+        <div className="home-workspace-grid">
+          <div className="home-workspace-card">
+            <div className="section-header">
+              <h3>{workspace.workspaces.find((item: { id: string }) => item.id === workspace.activeWorkspaceId)?.name ?? '未选择工作区'}</h3>
+              <span className="badge badge-count">{workspace.documents.length}</span>
+            </div>
+            <p className="home-workspace-description">
+              {workspace.workspaces.find((item: { id: string }) => item.id === workspace.activeWorkspaceId)?.description || '把论文导入到 OpenSciReader 自有数据目录，并围绕当前研究主题组织文档。'}
+            </p>
+            <div className="home-workspace-actions">
+              <Button variant="secondary" size="sm" onClick={() => void onImportFiles()} disabled={workspace.isImporting || !workspace.activeWorkspaceId}>
+                {workspace.isImporting ? '导入中...' : '导入文件'}
+              </Button>
+            </div>
+          </div>
+          <div className="home-workspace-card">
+            <div className="section-header">
+              <h3>当前文档</h3>
+              <span className="badge badge-count">{workspace.documents.length}</span>
+            </div>
+            {workspace.documents.length ? (
+              <div className="library-item-list">
+                {workspace.documents.map((document: { id: string; workspaceId: string; title: string; primaryPdfPath: string; originalFileName: string; sourceType: string }) => (
+                  <button
+                    key={document.id}
+                    type="button"
+                    className="item-button item-button-card"
+                    onDoubleClick={() => onOpenPdf({ id: document.id, title: document.title, pdfPath: document.primaryPdfPath ?? null, workspaceId: document.workspaceId, documentId: document.id, sourceKind: 'workspace_document' })}
+                  >
+                    <strong>{document.title}</strong>
+                    <small>{document.originalFileName || '已导入文档'} · {document.sourceType}</small>
+                  </button>
+                ))}
+              </div>
+            ) : <p className="empty-inline">当前工作区还没有文档，先从本地导入 PDF 或 Markdown。</p>}
+          </div>
+        </div>
+
+        <h2 className="home-section-title">导入源</h2>
         <div className="home-library">
           <div className="home-library-tree">
             <div className="section-header"><h3>文献目录</h3><span className="badge badge-count">{zotero.collections.length}</span></div>
@@ -154,16 +197,27 @@ export function HomePage({ zotero, onOpenPdf }: HomePageProps) {
             {zotero.items.length ? (
               <div className="library-item-list">
                 {zotero.items.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="item-button item-button-card"
-                    onDoubleClick={() => onOpenPdf({ id: item.id, title: item.title, pdfPath: item.pdfPath ?? null, itemType: item.itemType, citeKey: item.citeKey })}
-                    onClick={() => zotero.selectItem(item)}
-                  >
-                    <strong>{item.title}</strong>
-                    <small>{item.year || 'Unknown year'} · {item.citeKey} {item.hasPdf ? 'PDF' : ''}</small>
-                  </button>
+                  <div key={item.id} className="item-button item-button-card">
+                    <button
+                      type="button"
+                      className="item-button item-button-card"
+                      onDoubleClick={() => onOpenPdf({ id: item.id, title: item.title, pdfPath: item.pdfPath ?? null, sourceKind: 'zotero_item', itemType: item.itemType, citeKey: item.citeKey })}
+                      onClick={() => zotero.selectItem(item)}
+                    >
+                      <strong>{item.title}</strong>
+                      <small>{item.year || 'Unknown year'} · {item.citeKey} {item.hasPdf ? 'PDF' : ''}</small>
+                    </button>
+                    <div className="home-workspace-actions">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void onImportZoteroItem({ id: item.id, title: item.title, pdfPath: item.pdfPath, citeKey: item.citeKey })}
+                        disabled={!item.pdfPath || workspace.isImporting || !workspace.activeWorkspaceId}
+                      >
+                        导入到当前工作区
+                      </Button>
+                    </div>
+                  </div>
                 ))}
               </div>
             ) : <p className="empty-inline">从左侧目录选择后，这里会列出当前集合的文献条目。</p>}

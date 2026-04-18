@@ -245,13 +245,22 @@ body,
 }
 
 /* ===== MAIN CONTENT AREA ===== */
-.app-content {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+.app-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-/* ===== HOME PAGE ===== */
+.workspace-switcher {
+  min-width: 180px;
+  height: 34px;
+  border-radius: var(--osr-radius-sm);
+  border: 1px solid var(--osr-border);
+  background: var(--osr-bg-card);
+  color: var(--osr-text);
+  padding: 0 10px;
+}
+
 .home-page {
   height: 100%;
   overflow-y: auto;
@@ -502,6 +511,35 @@ body,
   border-radius: var(--osr-radius-md);
   background: var(--osr-accent-light);
   color: var(--osr-accent);
+}
+
+.home-workspace-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.home-workspace-card {
+  background: var(--osr-bg-card);
+  border: 1px solid var(--osr-border);
+  border-radius: var(--osr-radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.home-workspace-description {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--osr-text-secondary);
+}
+
+.home-workspace-actions {
+  display: flex;
+  gap: 10px;
 }
 
 /* Library Quick Access */

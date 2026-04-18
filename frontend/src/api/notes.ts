@@ -2,7 +2,7 @@ import type { ReaderNoteEntry } from '../types/notes';
 
 interface WailsNotesApp {
   SaveReaderNote: (entry: Omit<ReaderNoteEntry, 'id' | 'createdAt'>) => Promise<ReaderNoteEntry>;
-  ListReaderNotes: (itemId: string) => Promise<ReaderNoteEntry[]>;
+  ListReaderNotes: (workspaceId: string, documentId: string, itemId: string) => Promise<ReaderNoteEntry[]>;
 }
 
 function isWailsApp(value: unknown): value is { go: { main: { App: WailsNotesApp } } } {
@@ -24,11 +24,11 @@ export const notesApi = {
     }
     return app.SaveReaderNote(entry);
   },
-  async listReaderNotes(itemId: string): Promise<ReaderNoteEntry[]> {
+  async listReaderNotes(workspaceId: string, documentId: string, itemId: string): Promise<ReaderNoteEntry[]> {
     const app = getApp();
     if (!app) {
       return [];
     }
-    return app.ListReaderNotes(itemId);
+    return app.ListReaderNotes(workspaceId, documentId, itemId);
   },
 };

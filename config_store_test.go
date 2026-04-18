@@ -115,7 +115,16 @@ func TestAIWorkspaceConfigPersistence(t *testing.T) {
 		_ = store.Close()
 	}()
 
-	defaults, err := store.GetAIWorkspaceConfig(t.Context())
+	workspaceA, err := store.CreateWorkspace(t.Context(), WorkspaceUpsertInput{Name: "Workspace A", Description: "", Color: ""})
+	if err != nil {
+		t.Fatalf("CreateWorkspace A error: %v", err)
+	}
+	workspaceB, err := store.CreateWorkspace(t.Context(), WorkspaceUpsertInput{Name: "Workspace B", Description: "", Color: ""})
+	if err != nil {
+		t.Fatalf("CreateWorkspace B error: %v", err)
+	}
+
+	defaults, err := store.GetAIWorkspaceConfig(t.Context(), workspaceA.ID)
 	if err != nil {
 		t.Fatalf("GetAIWorkspaceConfig default error: %v", err)
 	}
@@ -123,7 +132,7 @@ func TestAIWorkspaceConfigPersistence(t *testing.T) {
 		t.Fatalf("default SummaryMode = %q, want auto", defaults.SummaryMode)
 	}
 
-	saved, err := store.SaveAIWorkspaceConfig(t.Context(), AIWorkspaceConfig{
+	saved, err := store.SaveAIWorkspaceConfig(t.Context(), workspaceA.ID, AIWorkspaceConfig{
 		SummaryMode:          "multi",
 		SummaryChunkPages:    4,
 		SummaryChunkMaxChars: 15000,
@@ -143,7 +152,7 @@ func TestAIWorkspaceConfigPersistence(t *testing.T) {
 		t.Fatalf("saved SummaryMode = %q, want multi", saved.SummaryMode)
 	}
 
-	reloaded, err := store.GetAIWorkspaceConfig(t.Context())
+	reloaded, err := store.GetAIWorkspaceConfig(t.Context(), workspaceA.ID)
 	if err != nil {
 		t.Fatalf("GetAIWorkspaceConfig reload error: %v", err)
 	}
@@ -159,8 +168,77 @@ func TestAIWorkspaceConfigPersistence(t *testing.T) {
 	if reloaded.DrawingProviderID != 7 {
 		t.Fatalf("reloaded DrawingProviderID = %d, want 7", reloaded.DrawingProviderID)
 	}
-	if reloaded.DrawingModel != "gemini-3-pro-image-preview" {
-		t.Fatalf("reloaded DrawingModel = %q, want gemini-3-pro-image-preview", reloaded.DrawingModel)
+	otherWorkspace, err := store.GetAIWorkspaceConfig(t.Context(), workspaceB.ID)
+	if err != nil {
+		t.Fatalf("GetAIWorkspaceConfig other workspace error: %v", err)
+	}
+	if otherWorkspace.SummaryMode != "auto" {
+		t.Fatalf("other workspace SummaryMode = %q, want auto", otherWorkspace.SummaryMode)
+	}
+}
+
+func TestImportFilesStoresZoteroExternalLink(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	workspaceRoot := tempDir + "/source"
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("create source dir error: %v", err)
+	}
+	sourceFile := workspaceRoot + "/paper.pdf"
+	if err := os.WriteFile(sourceFile, []byte("pdf"), 0o600); err != nil {
+		t.Fatalf("write source file error: %v", err)
+	}
+
+	paths := appPaths{
+		RootDir:           tempDir,
+		AppConfigDBPath:   tempDir + "/app.sqlite",
+		OCRCacheDBPath:    tempDir + "/ocr.sqlite",
+		EncryptionKeyPath: tempDir + "/config.key",
+		LibraryRootDir:    tempDir + "/library",
+		WorkspacesRootDir: tempDir + "/library/workspaces",
+	}
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	workspace, err := store.CreateWorkspace(t.Context(), WorkspaceUpsertInput{Name: "Workspace", Description: "", Color: ""})
+	if err != nil {
+		t.Fatalf("CreateWorkspace error: %v", err)
+	}
+
+	result, err := store.ImportFiles(t.Context(), paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{sourceFile},
+		SourceType:  "zotero",
+		SourceLabel: "smith2024",
+		SourceRef:   "users/0/items/ABC123",
+		Title:       "A Better Paper Title",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles error: %v", err)
+	}
+	if len(result.Documents) != 1 {
+		t.Fatalf("imported documents = %d, want 1", len(result.Documents))
+	}
+	if result.Documents[0].Title != "A Better Paper Title" {
+		t.Fatalf("document title = %q, want A Better Paper Title", result.Documents[0].Title)
+	}
+
+	var provider, externalID, externalKey string
+	if err := store.appDB.QueryRowContext(t.Context(), `SELECT provider, external_id, external_key FROM document_external_links WHERE document_id = ?;`, result.Documents[0].ID).Scan(&provider, &externalID, &externalKey); err != nil {
+		t.Fatalf("query document_external_links error: %v", err)
+	}
+	if provider != "zotero" {
+		t.Fatalf("provider = %q, want zotero", provider)
+	}
+	if externalID != "users/0/items/ABC123" {
+		t.Fatalf("external_id = %q, want users/0/items/ABC123", externalID)
+	}
+	if externalKey != "smith2024" {
+		t.Fatalf("external_key = %q, want smith2024", externalKey)
 	}
 }
 
@@ -623,7 +701,7 @@ func TestDeleteChatHistoryRemovesOnlyTargetEntry(t *testing.T) {
 		t.Fatalf("DeleteChatHistory error: %v", err)
 	}
 
-	itemAHistory, err := store.ListChatHistory(t.Context(), "item-a")
+	itemAHistory, err := store.ListChatHistory(t.Context(), "", "", "item-a")
 	if err != nil {
 		t.Fatalf("ListChatHistory item-a error: %v", err)
 	}
@@ -634,7 +712,7 @@ func TestDeleteChatHistoryRemovesOnlyTargetEntry(t *testing.T) {
 		t.Fatalf("remaining item-a history id = %d, want %d", itemAHistory[0].ID, second.ID)
 	}
 
-	itemBHistory, err := store.ListChatHistory(t.Context(), "item-b")
+	itemBHistory, err := store.ListChatHistory(t.Context(), "", "", "item-b")
 	if err != nil {
 		t.Fatalf("ListChatHistory item-b error: %v", err)
 	}

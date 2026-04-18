@@ -2,7 +2,7 @@ import type { ChatHistoryEntry } from '../types/history';
 
 interface WailsHistoryApp {
   SaveChatHistory: (entry: Omit<ChatHistoryEntry, 'id' | 'createdAt'>) => Promise<ChatHistoryEntry>;
-  ListChatHistory: (itemId: string) => Promise<ChatHistoryEntry[]>;
+  ListChatHistory: (workspaceId: string, documentId: string, itemId: string) => Promise<ChatHistoryEntry[]>;
   DeleteChatHistory: (id: number) => Promise<void>;
 }
 
@@ -25,12 +25,12 @@ export const historyApi = {
     }
     return app.SaveChatHistory(entry);
   },
-  async listChatHistory(itemId: string): Promise<ChatHistoryEntry[]> {
+  async listChatHistory(workspaceId: string, documentId: string, itemId: string): Promise<ChatHistoryEntry[]> {
     const app = getApp();
     if (!app) {
       return [];
     }
-    return app.ListChatHistory(itemId);
+    return app.ListChatHistory(workspaceId, documentId, itemId);
   },
   async deleteChatHistory(id: number): Promise<void> {
     const app = getApp();

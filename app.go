@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"OpenSciReader/internal/translator"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
@@ -56,12 +58,12 @@ func (a *App) GetConfigSnapshot() (ConfigSnapshot, error) {
 	return a.store.GetConfigSnapshot(a.ctx)
 }
 
-func (a *App) GetAIWorkspaceConfig() (AIWorkspaceConfig, error) {
-	return a.store.GetAIWorkspaceConfig(a.ctx)
+func (a *App) GetAIWorkspaceConfig(workspaceID string) (AIWorkspaceConfig, error) {
+	return a.store.GetAIWorkspaceConfig(a.ctx, workspaceID)
 }
 
-func (a *App) SaveAIWorkspaceConfig(input AIWorkspaceConfig) (AIWorkspaceConfig, error) {
-	return a.store.SaveAIWorkspaceConfig(a.ctx, input)
+func (a *App) SaveAIWorkspaceConfig(workspaceID string, input AIWorkspaceConfig) (AIWorkspaceConfig, error) {
+	return a.store.SaveAIWorkspaceConfig(a.ctx, workspaceID, input)
 }
 
 func (a *App) GetPDFTranslateRuntimeStatus() (PDFTranslateRuntimeConfig, error) {
@@ -130,6 +132,43 @@ func (a *App) DeleteModel(id int64) error {
 	return a.store.DeleteModel(a.ctx, id)
 }
 
+func (a *App) ListWorkspaces() ([]Workspace, error) {
+	return a.store.ListWorkspaces(a.ctx)
+}
+
+func (a *App) CreateWorkspace(input WorkspaceUpsertInput) (Workspace, error) {
+	return a.store.CreateWorkspace(a.ctx, input)
+}
+
+func (a *App) ImportFiles(input ImportFilesInput) (ImportFilesResult, error) {
+	return a.store.ImportFiles(a.ctx, a.paths, input)
+}
+
+func (a *App) ImportZoteroItem(workspaceID, itemID, pdfPath, title, citeKey string) (ImportFilesResult, error) {
+	return a.store.ImportFiles(a.ctx, a.paths, ImportFilesInput{
+		WorkspaceID: workspaceID,
+		FilePaths:   []string{pdfPath},
+		SourceType:  "zotero",
+		SourceLabel: firstNonEmpty(citeKey, title),
+		SourceRef:   itemID,
+		Title:       strings.TrimSpace(title),
+	})
+}
+
+func (a *App) SelectImportFiles() ([]string, error) {
+	return runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择要导入的文件",
+		Filters: []runtime.FileFilter{{
+			DisplayName: "Documents",
+			Pattern:     "*.pdf;*.md;*.markdown",
+		}},
+	})
+}
+
+func (a *App) ListDocuments(workspaceID string) ([]DocumentRecord, error) {
+	return a.store.ListDocumentsByWorkspace(a.ctx, workspaceID)
+}
+
 func (a *App) GetCollections(source string) ([]CollectionTree, error) {
 	return a.zotero.GetCollections(a.ctx, source)
 }
@@ -158,16 +197,16 @@ func (a *App) ProxyTranslation(providerID, modelID int64, text, sourceLang, targ
 	return a.gateway.ProxyTranslation(a.ctx, providerID, modelID, text, sourceLang, targetLang)
 }
 
-func (a *App) GenerateResearchFigure(providerID, modelID int64, prompt string, contextData GatewayContextData) (FigureGenerationResult, error) {
-	return a.gateway.GenerateResearchFigure(a.ctx, providerID, modelID, prompt, contextData)
+func (a *App) GenerateResearchFigure(providerID, modelID int64, prompt string, contextData GatewayContextData, workspaceID string) (FigureGenerationResult, error) {
+	return a.gateway.GenerateResearchFigure(a.ctx, providerID, modelID, prompt, contextData, workspaceID)
 }
 
 func (a *App) SaveChatHistory(entry ChatHistoryEntry) (ChatHistoryEntry, error) {
 	return a.store.SaveChatHistory(a.ctx, entry)
 }
 
-func (a *App) ListChatHistory(itemID string) ([]ChatHistoryEntry, error) {
-	return a.store.ListChatHistory(a.ctx, itemID)
+func (a *App) ListChatHistory(workspaceID, documentID, itemID string) ([]ChatHistoryEntry, error) {
+	return a.store.ListChatHistory(a.ctx, workspaceID, documentID, itemID)
 }
 
 func (a *App) DeleteChatHistory(id int64) error {
@@ -178,6 +217,6 @@ func (a *App) SaveReaderNote(entry ReaderNoteEntry) (ReaderNoteEntry, error) {
 	return a.store.SaveReaderNote(a.ctx, entry)
 }
 
-func (a *App) ListReaderNotes(itemID string) ([]ReaderNoteEntry, error) {
-	return a.store.ListReaderNotes(a.ctx, itemID)
+func (a *App) ListReaderNotes(workspaceID, documentID, itemID string) ([]ReaderNoteEntry, error) {
+	return a.store.ListReaderNotes(a.ctx, workspaceID, documentID, itemID)
 }

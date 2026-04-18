@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNod
 import { BookOpen, FileText, Home, Plus, Settings2, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import './App.css';
 import { configApi } from './api/config';
+import { workspaceApi } from './api/workspace';
 import { ModelDiscoveryModal } from './components/ModelDiscoveryModal';
 import { HomePage } from './components/HomePage';
 import { ReaderTab } from './components/ReaderTab';
@@ -19,6 +20,7 @@ import {
 } from './lib/aiCatalog';
 import { useConfigStore, useProviderConfigs } from './store/configStore';
 import { useTabStore } from './store/tabStore';
+import { useWorkspaceStore } from './store/workspaceStore';
 import { useZoteroStore } from './store/zoteroStore';
 import {
   PROVIDER_BASE_URL_HINTS,
@@ -90,6 +92,7 @@ export default function App() {
   const setActiveTab = useTabStore((state) => state.setActiveTab);
 
   const zotero = useZoteroStore();
+  const workspace = useWorkspaceStore();
   const providerConfigs = useProviderConfigs();
   const llmProviderConfigs = useMemo(
     () => providerConfigs.filter((item) => item.provider.type === 'llm'),
@@ -127,6 +130,10 @@ export default function App() {
   useEffect(() => {
     void zotero.loadCollections();
   }, [zotero.loadCollections]);
+
+  useEffect(() => {
+    void workspace.loadWorkspaces();
+  }, [workspace.loadWorkspaces]);
 
   useEffect(() => configApi.subscribePDFTranslateRuntimeImportProgress(setRuntimeImportProgress), []);
 
@@ -184,17 +191,38 @@ export default function App() {
   );
 
   const handleOpenPdfTab = useCallback(
-    (item: { id: string; title: string; pdfPath: string | null; itemType?: string; citeKey?: string }) => {
+    (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => {
       openTab({
         id: item.id,
         title: item.title,
         pdfPath: item.pdfPath,
+        workspaceId: item.workspaceId,
+        documentId: item.documentId,
+        sourceKind: item.sourceKind,
         itemType: item.itemType,
         citeKey: item.citeKey,
       });
     },
     [openTab],
   );
+
+  const handleImportZoteroItem = useCallback(async (item: { id: string; title: string; pdfPath: string; citeKey: string }) => {
+    await workspace.importZoteroItem({
+      id: item.id,
+      key: item.citeKey,
+      citeKey: item.citeKey,
+      title: item.title,
+      creators: '',
+      year: '',
+      itemType: 'journalArticle',
+      libraryId: 0,
+      collectionIds: [],
+      attachmentCount: 1,
+      hasPdf: true,
+      pdfPath: item.pdfPath,
+      rawId: item.id,
+    });
+  }, [workspace]);
 
   const applyLLMTemplate = (template: ProviderTemplate) => setLlmForm(createProviderFromTemplate(template));
   const applyDrawingTemplate = (template: ProviderTemplate) => setDrawingForm(createProviderFromTemplate(template));
@@ -389,6 +417,38 @@ export default function App() {
           <span>OpenSciReader</span>
         </div>
         <div className="app-titlebar-actions">
+          <select
+            className="workspace-switcher"
+            value={workspace.activeWorkspaceId ?? ''}
+            onChange={(event) => void workspace.selectWorkspace(event.target.value)}
+            disabled={workspace.isLoading || workspace.workspaces.length === 0}
+          >
+            {workspace.workspaces.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={async () => {
+              const name = typeof window === 'undefined' ? '' : window.prompt('请输入工作区名称', 'New Workspace') ?? '';
+              if (!name.trim()) {
+                return;
+              }
+              try {
+                await workspace.createWorkspace({
+                  name: name.trim(),
+                  description: '',
+                  color: '#6366f1',
+                });
+              } catch {}
+            }}
+          >
+            <Plus size={14} />
+            新建工作区
+          </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => setConfigOpen(true)}>
             <Settings2 size={16} />
           </Button>
@@ -428,13 +488,14 @@ export default function App() {
         ))}
       </div>
 
-      {error || zotero.error ? (
+      {error || zotero.error || workspace.error ? (
         <div className="banner-error">
-          <span>{error ?? zotero.error}</span>
+          <span>{error ?? workspace.error ?? zotero.error}</span>
           <button
             type="button"
             onClick={() => {
               clearError();
+              workspace.clearError();
               zotero.clearError();
             }}
           >
@@ -447,6 +508,14 @@ export default function App() {
         {activeTabId === 'home' ? (
           <HomePage
             zotero={zotero}
+            workspace={workspace}
+            onImportFiles={async () => {
+              const selected = await workspaceApi.selectLocalFiles?.();
+              if (selected?.length) {
+                await workspace.importFiles(selected);
+              }
+            }}
+            onImportZoteroItem={handleImportZoteroItem}
             onOpenPdf={handleOpenPdfTab}
           />
         ) : (

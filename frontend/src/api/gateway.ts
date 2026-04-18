@@ -4,7 +4,7 @@ import type { FigureGenerationResult } from '../types/drawing';
 
 interface WailsGatewayApp {
   StreamLLMChat: (providerId: number, modelId: number, prompt: string, contextData: GatewayContextData) => Promise<string>;
-  GenerateResearchFigure: (providerId: number, modelId: number, prompt: string, contextData: GatewayContextData) => Promise<FigureGenerationResult>;
+  GenerateResearchFigure: (providerId: number, modelId: number, prompt: string, contextData: GatewayContextData, workspaceId: string) => Promise<FigureGenerationResult>;
 }
 
 function isWailsApp(value: unknown): value is { go: { main: { App: WailsGatewayApp } } } {
@@ -40,10 +40,10 @@ export const gatewayApi = {
     }, 20);
     return requestId;
   },
-  async generateResearchFigure(providerId: number, modelId: number, prompt: string, contextData: GatewayContextData): Promise<FigureGenerationResult> {
+  async generateResearchFigure(providerId: number, modelId: number, prompt: string, contextData: GatewayContextData, workspaceId: string): Promise<FigureGenerationResult> {
     const app = getApp();
     if (app) {
-      return app.GenerateResearchFigure(providerId, modelId, prompt, contextData);
+      return app.GenerateResearchFigure(providerId, modelId, prompt, contextData, workspaceId);
     }
 
     return {

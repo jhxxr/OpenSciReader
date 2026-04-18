@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 
 export interface TabItem {
-  id: string; // The zotero item ID or random
+  id: string;
   title: string;
   pdfPath: string | null;
+  workspaceId?: string;
+  documentId?: string;
+  sourceKind?: 'workspace_document' | 'zotero_item';
   itemType?: string;
   citeKey?: string;
 }
@@ -23,9 +26,12 @@ export const useTabStore = create<TabState>((set) => ({
 
   openTab: (item) =>
     set((state) => {
-      const exists = state.tabs.find((t) => t.id === item.id);
+      const key = `${item.workspaceId ?? ''}:${item.documentId ?? item.id}`;
+      const exists = state.tabs.find(
+        (t) => `${t.workspaceId ?? ''}:${t.documentId ?? t.id}` === key,
+      );
       if (exists) {
-        return { activeTabId: item.id };
+        return { activeTabId: exists.id };
       }
       return {
         tabs: [...state.tabs, item],
