@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, LoaderCircle, RefreshCw, Sparkles, SquareX, Trash2 } from 'lucide-react';
 import { MarkdownPreview } from './MarkdownPreview';
 import { Button } from './ui/Button';
@@ -26,15 +27,18 @@ interface WorkspaceTabProps {
   isStartingWikiScan: boolean;
   isCancellingWikiScan: boolean;
   isDeletingWikiPages: boolean;
-  onImportFiles: () => Promise<void>;
-  onRefreshDocuments: () => Promise<void>;
-  onOpenPdf: (document: DocumentRecord) => void;
-  onDeleteDocument: (document: Pick<DocumentRecord, 'id' | 'workspaceId' | 'title' | 'originalFileName'>) => Promise<void>;
-  onStartWikiScan: () => Promise<void>;
+  wikiScanProviderId: number;
+  wikiScanModelId: number;
+  onStartWikiScan: (providerId: number, modelId: number) => Promise<void>;
   onCancelWikiScan: () => Promise<void>;
   onRefreshWikiPages: () => Promise<void>;
   onSelectWikiPage: (pageId: string) => Promise<void>;
   onDeleteWikiPages: () => Promise<void>;
+  onImportFiles: () => Promise<void>;
+  onRefreshDocuments: () => Promise<void>;
+  onOpenPdf: (document: DocumentRecord) => void;
+  onDeleteDocument: (document: Pick<DocumentRecord, 'id' | 'workspaceId' | 'title' | 'originalFileName'>) => Promise<void>;
+  onChangeWikiScanModel: (providerId: number, modelId: number) => void;
 }
 
 export function WorkspaceTab({
@@ -54,17 +58,66 @@ export function WorkspaceTab({
   isStartingWikiScan,
   isCancellingWikiScan,
   isDeletingWikiPages,
-  onImportFiles,
-  onRefreshDocuments,
-  onOpenPdf,
-  onDeleteDocument,
+  wikiScanProviderId,
+  wikiScanModelId,
   onStartWikiScan,
   onCancelWikiScan,
   onRefreshWikiPages,
   onSelectWikiPage,
   onDeleteWikiPages,
+  onImportFiles,
+  onRefreshDocuments,
+  onOpenPdf,
+  onDeleteDocument,
+  onChangeWikiScanModel,
 }: WorkspaceTabProps) {
-  const hasRunnableModel = llmProviderConfigs.some((item) => item.models.length > 0);
+  const [localWikiScanProviderId, setLocalWikiScanProviderId] = useState<number>(wikiScanProviderId);
+  const [localWikiScanModelId, setLocalWikiScanModelId] = useState<number>(wikiScanModelId);
+
+  useEffect(() => {
+    setLocalWikiScanProviderId(wikiScanProviderId);
+  }, [wikiScanProviderId]);
+
+  useEffect(() => {
+    setLocalWikiScanModelId(wikiScanModelId);
+  }, [wikiScanModelId]);
+
+  const llmProvidersWithModels = useMemo(
+    () => llmProviderConfigs.filter((item) => item.provider.type === 'llm' && item.models.length > 0),
+    [llmProviderConfigs]
+  );
+
+  const selectedProviderConfig = useMemo(
+    () => llmProvidersWithModels.find((item) => item.provider.id === localWikiScanProviderId) ?? null,
+    [llmProvidersWithModels, localWikiScanProviderId]
+  );
+
+  const selectedModelRecord = useMemo(
+    () => selectedProviderConfig?.models.find((model) => model.id === localWikiScanModelId) ?? null,
+    [selectedProviderConfig, localWikiScanModelId]
+  );
+
+  const handleProviderChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
+    const newProviderId = Number(event.target.value);
+    setLocalWikiScanProviderId(newProviderId);
+    const provider = llmProvidersWithModels.find((item) => item.provider.id === newProviderId);
+    const firstModelId = provider?.models[0]?.id ?? 0;
+    setLocalWikiScanModelId(firstModelId);
+    onChangeWikiScanModel(newProviderId, firstModelId);
+  }, [llmProvidersWithModels, onChangeWikiScanModel]);
+
+  const handleModelChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
+    const newModelId = Number(event.target.value);
+    setLocalWikiScanModelId(newModelId);
+    onChangeWikiScanModel(localWikiScanProviderId, newModelId);
+  }, [localWikiScanProviderId, onChangeWikiScanModel]);
+
+  const handleStartScan = useCallback(() => {
+    if (localWikiScanProviderId > 0 && localWikiScanModelId > 0) {
+      void onStartWikiScan(localWikiScanProviderId, localWikiScanModelId);
+    }
+  }, [localWikiScanProviderId, localWikiScanModelId, onStartWikiScan]);
+
   const selectedPage =
     wikiPageContent?.page?.id === selectedWikiPageId
       ? wikiPageContent.page
@@ -160,7 +213,41 @@ export function WorkspaceTab({
                 <p className="workspace-panel-description">Run a workspace scan to build overview and per-document wiki pages.</p>
               </div>
               <div className="workspace-panel-header-actions home-workspace-actions home-workspace-actions-stacked">
-                <Button variant="secondary" size="sm" onClick={() => void onStartWikiScan()} disabled={isStartingWikiScan || isCancellingWikiScan || !hasRunnableModel}>
+                <div className="wiki-model-selector">
+                  <select
+                    className="wiki-provider-select"
+                    value={localWikiScanProviderId}
+                    onChange={handleProviderChange}
+                    disabled={llmProvidersWithModels.length === 0 || isStartingWikiScan || activeWikiJob?.status === 'running'}
+                  >
+                    {llmProvidersWithModels.length === 0 ? (
+                      <option value={0}>No LLM provider</option>
+                    ) : localWikiScanProviderId === 0 ? (
+                      <option value={0}>Select provider</option>
+                    ) : null}
+                    {llmProvidersWithModels.map((item) => (
+                      <option key={item.provider.id} value={item.provider.id}>
+                        {item.provider.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="wiki-model-select"
+                    value={localWikiScanModelId}
+                    onChange={handleModelChange}
+                    disabled={!selectedProviderConfig || isStartingWikiScan || activeWikiJob?.status === 'running'}
+                  >
+                    {!selectedProviderConfig ? (
+                      <option value={0}>Select model</option>
+                    ) : null}
+                    {selectedProviderConfig?.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button variant="secondary" size="sm" onClick={handleStartScan} disabled={isStartingWikiScan || isCancellingWikiScan || !selectedProviderConfig || !selectedModelRecord}>
                   <Sparkles size={14} />
                   {isStartingWikiScan ? 'Starting...' : 'Scan'}
                 </Button>
@@ -179,8 +266,12 @@ export function WorkspaceTab({
               </div>
             </div>
 
-            {!hasRunnableModel ? (
-              <p className="empty-inline">Configure at least one LLM provider with a model before starting a workspace wiki scan.</p>
+            {!selectedProviderConfig || !selectedModelRecord ? (
+              <p className="empty-inline">
+                {llmProvidersWithModels.length === 0
+                  ? 'Configure at least one LLM provider with a model before starting a workspace wiki scan.'
+                  : '请先为当前工作区选择扫描模型'}
+              </p>
             ) : null}
 
             {activeWikiJob ? (
@@ -191,6 +282,11 @@ export function WorkspaceTab({
                     <span>{activeProgress.toFixed(1)}%</span>
                   </div>
                   <p>{activeWikiJob.currentItem || activeWikiJob.currentStage || 'Preparing workspace wiki scan...'}</p>
+                  {selectedProviderConfig && selectedModelRecord ? (
+                    <small className="wiki-scan-model-info">
+                      Using {selectedProviderConfig.provider.name} / {selectedModelRecord.modelId}
+                    </small>
+                  ) : null}
                 </div>
                 <div className="translate-progress">
                   <div className="translate-progress-bar">
