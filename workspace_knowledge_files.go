@@ -20,17 +20,12 @@ func newWorkspaceKnowledgeFiles(paths appPaths, workspaceID string) workspaceKno
 }
 
 func (f workspaceKnowledgeFiles) EnsureLayout() error {
-	for _, directory := range []string{
-		f.workspaceRootDir(),
-		f.rawDir(),
-		f.extractsDir(),
-		f.schemaDir(),
-		f.bySourceDir(),
-		f.scanRunsDir(),
-		f.wikiDir(),
-		f.wikiDocsDir(),
-		f.wikiConceptsDir(),
-	} {
+	layoutDirs, err := f.layoutDirs()
+	if err != nil {
+		return err
+	}
+
+	for _, directory := range layoutDirs {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return fmt.Errorf("create workspace knowledge directory %s: %w", directory, err)
 		}
@@ -38,28 +33,65 @@ func (f workspaceKnowledgeFiles) EnsureLayout() error {
 	return nil
 }
 
-func (f workspaceKnowledgeFiles) SourcesPath() string {
-	return filepath.Join(f.rawDir(), "sources.json")
+func (f workspaceKnowledgeFiles) SourcesPath() (string, error) {
+	rawDir, err := f.rawDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(rawDir, "sources.json"), nil
 }
 
-func (f workspaceKnowledgeFiles) ExtractPath(sourceSlug string) string {
-	return filepath.Join(f.extractsDir(), strings.TrimSpace(sourceSlug)+".md")
+func (f workspaceKnowledgeFiles) ExtractPath(sourceSlug string) (string, error) {
+	extractsDir, err := f.extractsDir()
+	if err != nil {
+		return "", err
+	}
+	validatedSourceSlug, err := validateWorkspaceKnowledgePathSegment("source slug", sourceSlug)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(extractsDir, validatedSourceSlug+".md"), nil
 }
 
-func (f workspaceKnowledgeFiles) BySourcePath(sourceSlug string) string {
-	return filepath.Join(f.bySourceDir(), strings.TrimSpace(sourceSlug)+".json")
+func (f workspaceKnowledgeFiles) BySourcePath(sourceSlug string) (string, error) {
+	bySourceDir, err := f.bySourceDir()
+	if err != nil {
+		return "", err
+	}
+	validatedSourceSlug, err := validateWorkspaceKnowledgePathSegment("source slug", sourceSlug)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(bySourceDir, validatedSourceSlug+".json"), nil
 }
 
-func (f workspaceKnowledgeFiles) ScanRunPath(scanRunID string) string {
-	return filepath.Join(f.scanRunsDir(), strings.TrimSpace(scanRunID)+".json")
+func (f workspaceKnowledgeFiles) ScanRunPath(scanRunID string) (string, error) {
+	scanRunsDir, err := f.scanRunsDir()
+	if err != nil {
+		return "", err
+	}
+	validatedScanRunID, err := validateWorkspaceKnowledgePathSegment("scan run id", scanRunID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(scanRunsDir, validatedScanRunID+".json"), nil
 }
 
 func (f workspaceKnowledgeFiles) WriteSources(sources []WorkspaceKnowledgeSource) error {
-	return writeWorkspaceKnowledgeJSON(f.SourcesPath(), sources)
+	sourcesPath, err := f.SourcesPath()
+	if err != nil {
+		return err
+	}
+	return writeWorkspaceKnowledgeJSON(sourcesPath, sources)
 }
 
 func (f workspaceKnowledgeFiles) ReadSources() ([]WorkspaceKnowledgeSource, error) {
-	if _, err := os.Stat(f.SourcesPath()); err != nil {
+	sourcesPath, err := f.SourcesPath()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(sourcesPath); err != nil {
 		if os.IsNotExist(err) {
 			return []WorkspaceKnowledgeSource{}, nil
 		}
@@ -67,7 +99,7 @@ func (f workspaceKnowledgeFiles) ReadSources() ([]WorkspaceKnowledgeSource, erro
 	}
 
 	var sources []WorkspaceKnowledgeSource
-	if err := readWorkspaceKnowledgeJSON(f.SourcesPath(), &sources); err != nil {
+	if err := readWorkspaceKnowledgeJSON(sourcesPath, &sources); err != nil {
 		return nil, err
 	}
 	if sources == nil {
@@ -77,23 +109,32 @@ func (f workspaceKnowledgeFiles) ReadSources() ([]WorkspaceKnowledgeSource, erro
 }
 
 func (f workspaceKnowledgeFiles) WriteBySource(sourceSlug string, payload WorkspaceKnowledgeBySourcePayload) error {
-	return writeWorkspaceKnowledgeJSON(f.BySourcePath(sourceSlug), payload)
+	bySourcePath, err := f.BySourcePath(sourceSlug)
+	if err != nil {
+		return err
+	}
+	return writeWorkspaceKnowledgeJSON(bySourcePath, payload)
 }
 
 func (f workspaceKnowledgeFiles) ReadBySource(sourceSlug string) (WorkspaceKnowledgeBySourcePayload, error) {
+	bySourcePath, err := f.BySourcePath(sourceSlug)
+	if err != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, err
+	}
+
 	var payload WorkspaceKnowledgeBySourcePayload
-	if err := readWorkspaceKnowledgeJSON(f.BySourcePath(sourceSlug), &payload); err != nil {
+	if err := readWorkspaceKnowledgeJSON(bySourcePath, &payload); err != nil {
 		return WorkspaceKnowledgeBySourcePayload{}, err
 	}
 	return payload, nil
 }
 
 func (f workspaceKnowledgeFiles) WriteScanRun(record WorkspaceKnowledgeScanRunRecord) error {
-	runID := strings.TrimSpace(record.ID)
-	if runID == "" {
-		return fmt.Errorf("scan run id is required")
+	scanRunPath, err := f.ScanRunPath(record.ID)
+	if err != nil {
+		return err
 	}
-	return writeWorkspaceKnowledgeJSON(f.ScanRunPath(runID), record)
+	return writeWorkspaceKnowledgeJSON(scanRunPath, record)
 }
 
 func writeWorkspaceKnowledgeJSON(path string, payload any) error {
@@ -107,38 +148,95 @@ func readWorkspaceKnowledgeJSON(path string, target any) error {
 	return readJSONFile(path, target)
 }
 
-func (f workspaceKnowledgeFiles) workspaceRootDir() string {
-	return filepath.Join(f.paths.WorkspacesRootDir, f.workspaceID)
+func (f workspaceKnowledgeFiles) layoutDirs() ([]string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return nil, err
+	}
+
+	rawDir := filepath.Join(workspaceRootDir, "raw")
+	extractsDir := filepath.Join(rawDir, "extracts")
+	schemaDir := filepath.Join(workspaceRootDir, "schema")
+	bySourceDir := filepath.Join(schemaDir, "by-source")
+	scanRunsDir := filepath.Join(schemaDir, "scan-runs")
+	wikiDir := filepath.Join(workspaceRootDir, "wiki")
+	wikiDocsDir := filepath.Join(wikiDir, "docs")
+	wikiConceptsDir := filepath.Join(wikiDir, "concepts")
+
+	return []string{
+		workspaceRootDir,
+		rawDir,
+		extractsDir,
+		schemaDir,
+		bySourceDir,
+		scanRunsDir,
+		wikiDir,
+		wikiDocsDir,
+		wikiConceptsDir,
+	}, nil
 }
 
-func (f workspaceKnowledgeFiles) rawDir() string {
-	return filepath.Join(f.workspaceRootDir(), "raw")
+func (f workspaceKnowledgeFiles) workspaceRootDir() (string, error) {
+	validatedWorkspaceID, err := validateWorkspaceKnowledgePathSegment("workspace id", f.workspaceID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(f.paths.WorkspacesRootDir, validatedWorkspaceID), nil
 }
 
-func (f workspaceKnowledgeFiles) extractsDir() string {
-	return filepath.Join(f.rawDir(), "extracts")
+func (f workspaceKnowledgeFiles) rawDir() (string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workspaceRootDir, "raw"), nil
 }
 
-func (f workspaceKnowledgeFiles) schemaDir() string {
-	return filepath.Join(f.workspaceRootDir(), "schema")
+func (f workspaceKnowledgeFiles) extractsDir() (string, error) {
+	rawDir, err := f.rawDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(rawDir, "extracts"), nil
 }
 
-func (f workspaceKnowledgeFiles) bySourceDir() string {
-	return filepath.Join(f.schemaDir(), "by-source")
+func (f workspaceKnowledgeFiles) schemaDir() (string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workspaceRootDir, "schema"), nil
 }
 
-func (f workspaceKnowledgeFiles) scanRunsDir() string {
-	return filepath.Join(f.schemaDir(), "scan-runs")
+func (f workspaceKnowledgeFiles) bySourceDir() (string, error) {
+	schemaDir, err := f.schemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(schemaDir, "by-source"), nil
 }
 
-func (f workspaceKnowledgeFiles) wikiDir() string {
-	return filepath.Join(f.workspaceRootDir(), "wiki")
+func (f workspaceKnowledgeFiles) scanRunsDir() (string, error) {
+	schemaDir, err := f.schemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(schemaDir, "scan-runs"), nil
 }
 
-func (f workspaceKnowledgeFiles) wikiDocsDir() string {
-	return filepath.Join(f.wikiDir(), "docs")
-}
-
-func (f workspaceKnowledgeFiles) wikiConceptsDir() string {
-	return filepath.Join(f.wikiDir(), "concepts")
+func validateWorkspaceKnowledgePathSegment(name, value string) (string, error) {
+	trimmedValue := strings.TrimSpace(value)
+	if trimmedValue == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	if trimmedValue == "." || trimmedValue == ".." {
+		return "", fmt.Errorf("%s must not contain traversal segments", name)
+	}
+	if filepath.IsAbs(trimmedValue) {
+		return "", fmt.Errorf("%s must not be absolute", name)
+	}
+	if strings.ContainsAny(trimmedValue, `/\`) {
+		return "", fmt.Errorf("%s must not contain path separators", name)
+	}
+	return trimmedValue, nil
 }
