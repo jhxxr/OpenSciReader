@@ -574,6 +574,59 @@ func TestWorkspaceWikiScanRunnerHonorsSmallContextPromptBudget(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWikiScanRunnerFailsTinyContextPromptBudgetBeforeLLMCall(t *testing.T) {
+	t.Parallel()
+
+	fixture := newWorkspaceKnowledgeScanFixture(t)
+	provider, model := saveWorkspaceKnowledgeLLMModelForTest(t, fixture.store, 10)
+
+	llm := &stubWorkspaceKnowledgeLLM{
+		bySource: WorkspaceKnowledgeBySourcePayload{
+			Entities: []WorkspaceKnowledgeEntity{{
+				ID:          "entity:method:too-small",
+				WorkspaceID: fixture.workspace.ID,
+				Title:       "Too Small",
+				Type:        "method",
+				Summary:     "Should never be written",
+				Origin:      "scan",
+				Status:      "confirmed",
+				Confidence:  0.9,
+				CreatedAt:   nowRFC3339(),
+				UpdatedAt:   nowRFC3339(),
+			}},
+		},
+	}
+	runner := &workspaceWikiScanRunner{
+		paths: fixture.paths,
+		store: fixture.store,
+		pdf: &stubWorkspaceKnowledgeExtractor{
+			markdown: "# Paper A\n\nTiny context overflow regression.",
+		},
+		knowledgeLLM: llm,
+	}
+
+	job := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", provider.ID, model.ID)
+	runner.run(context.Background(), job)
+
+	if llm.bySourceCallCount != 0 {
+		t.Fatalf("by-source llm call count = %d, want 0", llm.bySourceCallCount)
+	}
+
+	sources, err := fixture.files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources error: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources len = %d, want 1", len(sources))
+	}
+	if sources[0].Status != "error" {
+		t.Fatalf("source status = %q, want error", sources[0].Status)
+	}
+	if !strings.Contains(sources[0].LastError, "prompt budget too small") {
+		t.Fatalf("source last error = %q, want prompt budget too small", sources[0].LastError)
+	}
+}
+
 type workspaceKnowledgeScanFixture struct {
 	paths     appPaths
 	store     *configStore

@@ -305,7 +305,10 @@ func (r *workspaceWikiScanRunner) processSource(ctx context.Context, workspace W
 		return err
 	}
 
-	prompt := buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace, *source, markdown, r.workspaceKnowledgePromptCharBudget(ctx, job.ModelID))
+	prompt, err := buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace, *source, markdown, r.workspaceKnowledgePromptCharBudget(ctx, job.ModelID))
+	if err != nil {
+		return err
+	}
 	payload, err := r.knowledgeLLM.GenerateWorkspaceKnowledgeBySource(ctx, job.ProviderID, job.ModelID, prompt)
 	if err != nil {
 		return fmt.Errorf("generate by-source knowledge for %s: %w", source.Title, err)
@@ -633,14 +636,14 @@ func normalizeWorkspaceKnowledgeRelativePath(path string) string {
 	return strings.ToLower(filepath.ToSlash(filepath.Clean(trimmed)))
 }
 
-func buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace Workspace, source WorkspaceKnowledgeSource, markdown string, totalPromptBudget int) string {
+func buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace Workspace, source WorkspaceKnowledgeSource, markdown string, totalPromptBudget int) (string, error) {
 	if totalPromptBudget <= 0 {
-		return buildWorkspaceKnowledgeBySourcePrompt(workspace, source, "")
+		return "", fmt.Errorf("prompt budget too small for workspace knowledge extraction")
 	}
 
 	emptyPrompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, source, "")
 	if len(emptyPrompt) >= totalPromptBudget {
-		return emptyPrompt
+		return "", fmt.Errorf("prompt budget too small for workspace knowledge extraction")
 	}
 
 	maxSourceChars := totalPromptBudget - len(emptyPrompt)
@@ -658,7 +661,7 @@ func buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace Workspace, sour
 		}
 		high = mid - 1
 	}
-	return bestPrompt
+	return bestPrompt, nil
 }
 
 func trimWorkspaceKnowledgePromptMarkdown(markdown string, maxChars int) string {
