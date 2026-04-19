@@ -3265,6 +3265,235 @@ body,
   display: none;
 }
 
+/* ===== READER COPILOT (AI SIDEBAR) ===== */
+
+/* Ask Section */
+.reader-ask-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--osr-border-light);
+}
+
+.reader-ask-textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 12px;
+  border: 1px solid var(--osr-border-light);
+  border-radius: var(--osr-radius-md);
+  background: var(--osr-bg-sidebar);
+  color: var(--osr-text);
+  font-size: 14px;
+  resize: vertical;
+}
+
+.reader-ask-textarea:focus {
+  outline: none;
+  border-color: var(--osr-accent);
+}
+
+.scope-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scope-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--osr-text-secondary);
+  cursor: pointer;
+}
+
+.scope-checkbox input[type="checkbox"] {
+  accent-color: var(--osr-accent);
+}
+
+/* Answer Section */
+.reader-answer-section {
+  padding: 16px;
+  border-bottom: 1px solid var(--osr-border-light);
+  min-height: 100px;
+}
+
+.reader-answer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--osr-text-muted);
+}
+
+.reader-answer-empty {
+  text-align: center;
+  padding: 32px;
+  color: var(--osr-text-muted);
+  font-size: 13px;
+}
+
+/* Evidence Section */
+.reader-evidence-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--osr-border-light);
+}
+
+.evidence-group {
+  border: 1px solid var(--osr-border-light);
+  border-radius: var(--osr-radius-md);
+  overflow: hidden;
+}
+
+.evidence-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfa 100%);
+  border-bottom: 1px solid var(--osr-border-light);
+}
+
+.evidence-group-header h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.evidence-group-count {
+  background: var(--osr-accent);
+  color: white;
+  padding: 2px 8px;
+  border-radius: var(--osr-radius-full);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.evidence-item {
+  padding: 10px;
+  border-radius: var(--osr-radius-md);
+  background: var(--osr-bg-sidebar);
+  border: 1px solid var(--osr-border-light);
+}
+
+.evidence-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--osr-text);
+  margin-bottom: 4px;
+}
+
+.evidence-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.evidence-item-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--osr-text-secondary);
+  margin-bottom: 6px;
+}
+
+.evidence-item-source {
+  font-size: 11px;
+  color: var(--osr-text-muted);
+}
+
+/* Promote Section */
+.reader-promote-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.candidate-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--osr-border-light);
+  border-radius: var(--osr-radius-md);
+  background: var(--osr-bg-sidebar);
+}
+
+.candidate-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.candidate-summary-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.candidate-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--osr-text);
+  margin-bottom: 4px;
+}
+
+.candidate-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.candidate-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.candidate-details {
+  padding-top: 8px;
+  border-top: 1px solid var(--osr-border-light);
+}
+
+.candidate-aliases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.alias-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--osr-radius-full);
+  background: rgba(13, 155, 118, 0.08);
+  color: var(--osr-accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.candidate-source-footnote {
+  font-size: 11px;
+  color: var(--osr-text-muted);
+}
+
 /* ===== RESPONSIVE ===== */
 @media (max-width: 1200px) {
   .dual-pdf-row {
