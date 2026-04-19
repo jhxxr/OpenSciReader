@@ -126,6 +126,7 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 	}
 
 	promotedClaimIDs := make([]string, 0, len(input.Candidates))
+	claimsChanged := false
 	for _, candidate := range normalizeWorkspaceKnowledgeCandidates(input.Candidates) {
 		if strings.TrimSpace(candidate.Type) != "claim" {
 			continue
@@ -144,27 +145,20 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 			title = id
 		}
 
-		claim := claimsByID[id]
-		createdAt := claim.CreatedAt
-		if createdAt == "" {
-			createdAt = now
-		}
-
-		claim = WorkspaceKnowledgeClaim{
-			ID:          id,
-			WorkspaceID: workspaceID,
-			Title:       title,
-			Type:        "claim",
-			Summary:     strings.TrimSpace(candidate.Summary),
-			EntityIDs:   normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs),
-			SourceRefs:  normalizeWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate)),
-			Origin:      "promotion",
-			Status:      "promoted",
-			Confidence:  1,
-			CreatedAt:   createdAt,
-			UpdatedAt:   now,
-		}
+		claim, changed := mergeWorkspaceKnowledgePromotedClaim(claimsByID[id], workspaceID, WorkspaceKnowledgeCandidate{
+			ID:         id,
+			Title:      title,
+			Type:       candidate.Type,
+			Summary:    candidate.Summary,
+			EntityIDs:  candidate.EntityIDs,
+			SourceRefs: candidate.SourceRefs,
+			SourceID:   candidate.SourceID,
+			PageStart:  candidate.PageStart,
+			PageEnd:    candidate.PageEnd,
+			Excerpt:    candidate.Excerpt,
+		}, now)
 		claimsByID[id] = claim
+		claimsChanged = claimsChanged || changed
 		promotedClaimIDs = append(promotedClaimIDs, id)
 	}
 
@@ -176,12 +170,14 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 		return lessClaim(claims[i], claims[j])
 	})
 
-	claimsPath, err := files.ClaimsPath()
-	if err != nil {
-		return err
-	}
-	if err := writeWorkspaceKnowledgeJSON(claimsPath, claims); err != nil {
-		return err
+	if claimsChanged {
+		claimsPath, err := files.ClaimsPath()
+		if err != nil {
+			return err
+		}
+		if err := writeWorkspaceKnowledgeJSON(claimsPath, claims); err != nil {
+			return err
+		}
 	}
 
 	return appendWorkspaceKnowledgeConversationLog(files, workspaceKnowledgeConversationLogEntry{
@@ -386,18 +382,12 @@ func readWorkspaceKnowledgeOptionalJSON(path string, target any) error {
 
 func retrieveWorkspaceKnowledgeEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
 	schemaEvidence, err := retrieveWorkspaceKnowledgeSchemaEvidence(files, question)
-	if err != nil {
-		return nil, err
-	}
-	if len(schemaEvidence) > 0 {
+	if err == nil && len(schemaEvidence) > 0 {
 		return schemaEvidence, nil
 	}
 
 	wikiEvidence, err := retrieveWorkspaceKnowledgeWikiEvidence(files, question)
-	if err != nil {
-		return nil, err
-	}
-	if len(wikiEvidence) > 0 {
+	if err == nil && len(wikiEvidence) > 0 {
 		return wikiEvidence, nil
 	}
 
@@ -405,20 +395,13 @@ func retrieveWorkspaceKnowledgeEvidence(files workspaceKnowledgeFiles, question 
 }
 
 func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
+	hits := make([]WorkspaceKnowledgeEvidenceHit, 0)
+	var firstErr error
+
 	entities, err := readWorkspaceKnowledgeEntities(files)
 	if err != nil {
-		return nil, err
+		firstErr = err
 	}
-	claims, err := readWorkspaceKnowledgeClaims(files)
-	if err != nil {
-		return nil, err
-	}
-	tasks, err := readWorkspaceKnowledgeTasks(files)
-	if err != nil {
-		return nil, err
-	}
-
-	hits := make([]WorkspaceKnowledgeEvidenceHit, 0, len(entities)+len(claims)+len(tasks))
 	for _, entity := range entities {
 		hits = append(hits, WorkspaceKnowledgeEvidenceHit{
 			Kind:       "entity",
@@ -428,6 +411,11 @@ func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, que
 			Excerpt:    firstExcerpt(entity.SourceRefs),
 			SourceRefs: append([]WorkspaceKnowledgeSourceRef(nil), entity.SourceRefs...),
 		})
+	}
+
+	claims, err := readWorkspaceKnowledgeClaims(files)
+	if err != nil && firstErr == nil {
+		firstErr = err
 	}
 	for _, claim := range claims {
 		hits = append(hits, WorkspaceKnowledgeEvidenceHit{
@@ -439,6 +427,11 @@ func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, que
 			SourceRefs: append([]WorkspaceKnowledgeSourceRef(nil), claim.SourceRefs...),
 		})
 	}
+
+	tasks, err := readWorkspaceKnowledgeTasks(files)
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
 	for _, task := range tasks {
 		hits = append(hits, WorkspaceKnowledgeEvidenceHit{
 			Kind:       "task",
@@ -449,7 +442,15 @@ func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, que
 			SourceRefs: append([]WorkspaceKnowledgeSourceRef(nil), task.SourceRefs...),
 		})
 	}
-	return selectRelevantWorkspaceKnowledgeHits(question, hits), nil
+
+	selected := selectRelevantWorkspaceKnowledgeHits(question, hits)
+	if len(selected) > 0 {
+		return selected, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return []WorkspaceKnowledgeEvidenceHit{}, nil
 }
 
 func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
@@ -470,6 +471,7 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 	}
 
 	candidates := []wikiCandidate{}
+	var firstErr error
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return nil, err
@@ -491,7 +493,10 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read workspace knowledge wiki directory %s: %w", dir, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read workspace knowledge wiki directory %s: %w", dir, err)
+			}
+			continue
 		}
 		for _, entry := range entries {
 			if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
@@ -513,7 +518,10 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read workspace knowledge wiki page %s: %w", candidate.path, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read workspace knowledge wiki page %s: %w", candidate.path, err)
+			}
+			continue
 		}
 		trimmed := strings.TrimSpace(string(content))
 		if trimmed == "" {
@@ -528,7 +536,14 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 			Excerpt: workspaceKnowledgeTrimmedExcerpt(trimmed),
 		})
 	}
-	return selectRelevantWorkspaceKnowledgeHits(question, hits), nil
+	selected := selectRelevantWorkspaceKnowledgeHits(question, hits)
+	if len(selected) > 0 {
+		return selected, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return []WorkspaceKnowledgeEvidenceHit{}, nil
 }
 
 func retrieveWorkspaceKnowledgeRawEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
@@ -741,6 +756,69 @@ func candidateSourceRefs(candidate WorkspaceKnowledgeCandidate) []WorkspaceKnowl
 	}}
 }
 
+func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, workspaceID string, candidate WorkspaceKnowledgeCandidate, now string) (WorkspaceKnowledgeClaim, bool) {
+	candidateSourceRefs := normalizeWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
+	candidateEntityIDs := normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs)
+
+	if strings.TrimSpace(existing.ID) == "" {
+		createdAt := firstNonEmptyText(existing.CreatedAt, now)
+		updatedAt := firstNonEmptyText(existing.UpdatedAt, now)
+		return WorkspaceKnowledgeClaim{
+			ID:          strings.TrimSpace(candidate.ID),
+			WorkspaceID: strings.TrimSpace(workspaceID),
+			Title:       firstNonEmptyText(strings.TrimSpace(candidate.Title), strings.TrimSpace(candidate.ID)),
+			Type:        firstNonEmptyText(strings.TrimSpace(existing.Type), "claim"),
+			Summary:     strings.TrimSpace(candidate.Summary),
+			EntityIDs:   candidateEntityIDs,
+			SourceRefs:  candidateSourceRefs,
+			Origin:      firstNonEmptyText(strings.TrimSpace(existing.Origin), "promotion"),
+			Status:      firstNonEmptyText(strings.TrimSpace(existing.Status), "promoted"),
+			Confidence:  firstNonZeroFloat(existing.Confidence, 1),
+			CreatedAt:   createdAt,
+			UpdatedAt:   updatedAt,
+		}, true
+	}
+
+	merged := existing
+	if merged.WorkspaceID == "" {
+		merged.WorkspaceID = strings.TrimSpace(workspaceID)
+	}
+	if merged.Title == "" {
+		merged.Title = firstNonEmptyText(strings.TrimSpace(candidate.Title), merged.ID)
+	}
+	if merged.Type == "" {
+		merged.Type = "claim"
+	}
+	if merged.Summary == "" {
+		merged.Summary = strings.TrimSpace(candidate.Summary)
+	}
+	merged.EntityIDs = mergeWorkspaceKnowledgeStringValues(merged.EntityIDs, candidateEntityIDs)
+	merged.SourceRefs = mergeWorkspaceKnowledgeSourceRefValues(merged.SourceRefs, candidateSourceRefs)
+	if merged.Origin == "" {
+		merged.Origin = "promotion"
+	}
+	if merged.Status == "" {
+		merged.Status = "promoted"
+	}
+	if merged.Confidence == 0 {
+		merged.Confidence = 1
+	}
+	if merged.CreatedAt == "" {
+		merged.CreatedAt = firstNonEmptyText(existing.CreatedAt, now)
+	}
+
+	changed := !workspaceKnowledgeClaimsEqualIgnoringUpdatedAt(existing, merged)
+	if changed {
+		merged.UpdatedAt = firstNonEmptyText(now, existing.UpdatedAt, merged.CreatedAt)
+	} else {
+		merged.UpdatedAt = existing.UpdatedAt
+	}
+	if merged.UpdatedAt == "" {
+		merged.UpdatedAt = firstNonEmptyText(merged.CreatedAt, now)
+	}
+	return merged, changed
+}
+
 func normalizeWorkspaceKnowledgeCandidates(candidates []WorkspaceKnowledgeCandidate) []WorkspaceKnowledgeCandidate {
 	if len(candidates) == 0 {
 		return []WorkspaceKnowledgeCandidate{}
@@ -763,6 +841,65 @@ func normalizeWorkspaceKnowledgeCandidates(candidates []WorkspaceKnowledgeCandid
 		})
 	}
 	return normalized
+}
+
+func mergeWorkspaceKnowledgeStringValues(existing, candidate []string) []string {
+	merged := append([]string(nil), existing...)
+	merged = append(merged, candidate...)
+	return normalizeWorkspaceKnowledgeStringSlice(merged)
+}
+
+func mergeWorkspaceKnowledgeSourceRefValues(existing, candidate []WorkspaceKnowledgeSourceRef) []WorkspaceKnowledgeSourceRef {
+	merged := append([]WorkspaceKnowledgeSourceRef(nil), existing...)
+	merged = append(merged, candidate...)
+	return normalizeWorkspaceKnowledgeSourceRefs(merged)
+}
+
+func workspaceKnowledgeClaimsEqualIgnoringUpdatedAt(left, right WorkspaceKnowledgeClaim) bool {
+	return left.ID == right.ID &&
+		left.WorkspaceID == right.WorkspaceID &&
+		left.Title == right.Title &&
+		left.Type == right.Type &&
+		left.Summary == right.Summary &&
+		left.Origin == right.Origin &&
+		left.Status == right.Status &&
+		left.Confidence == right.Confidence &&
+		left.CreatedAt == right.CreatedAt &&
+		equalWorkspaceKnowledgeStringSlices(left.EntityIDs, right.EntityIDs) &&
+		equalWorkspaceKnowledgeSourceRefs(left.SourceRefs, right.SourceRefs)
+}
+
+func equalWorkspaceKnowledgeStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalWorkspaceKnowledgeSourceRefs(left, right []WorkspaceKnowledgeSourceRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func firstNonZeroFloat(values ...float64) float64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func normalizeWorkspaceKnowledgeStringSlice(values []string) []string {
