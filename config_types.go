@@ -178,6 +178,15 @@ type AIWorkspaceConfig struct {
 	DrawingModel         string `json:"drawingModel"`
 }
 
+type WorkspaceKnowledgeEvidenceHit struct {
+	Kind       string                        `json:"kind"`
+	ID         string                        `json:"id"`
+	Title      string                        `json:"title"`
+	Summary    string                        `json:"summary"`
+	Excerpt    string                        `json:"excerpt"`
+	SourceRefs []WorkspaceKnowledgeSourceRef `json:"sourceRefs"`
+}
+
 type DiscoveredModel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
