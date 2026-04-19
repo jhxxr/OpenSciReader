@@ -233,6 +233,20 @@ export function ReaderAIPanel({
   const activeEventNameRef = useRef<string | null>(null);
   const hydratedHistoryKeyRef = useRef("");
 
+  const [copilotState, setCopilotState] = useState<CopilotState>({
+    question: '',
+    scope: { selection: false, page: false, document: false, workspace: false },
+    isAsking: false,
+    answer: null,
+    answerError: null,
+    evidence: { entities: [], claims: [], tasks: [], sources: [] },
+    expandedGroups: { entities: false, claims: false, tasks: false, sources: false },
+    candidates: [],
+    expandedCandidates: new Set(),
+    promotingIds: new Set(),
+    promoteError: null,
+  });
+
   const currentFigureCapture = useMemo(
     () =>
       figureCaptures.find(
@@ -261,6 +275,8 @@ export function ReaderAIPanel({
   const drawingProviderName = drawingProviderConfig?.provider.name ?? "";
 
   const workspaceID = tab.workspaceId ?? "";
+  const workspaceId = useMemo(() => tab.workspaceId || '', [tab.workspaceId]);
+  const documentId = useMemo(() => tab.documentId || '', [tab.documentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -416,6 +432,78 @@ export function ReaderAIPanel({
   const providerHint = activeLLMModel
     ? `${activeLLMConfig?.provider.name ?? "LLM"} / ${activeLLMModel.modelId}`
     : "请选择可用的 LLM Provider 和 Model";
+
+  const askSection = (
+    <div className="reader-ask-section">
+      <textarea
+        className="reader-ask-textarea"
+        value={copilotState.question}
+        onChange={(e) => setCopilotState(prev => ({ ...prev, question: e.target.value }))}
+        placeholder="向工作区知识提问..."
+        disabled={copilotState.isAsking}
+      />
+
+      <div className="scope-checkboxes">
+        <label className="scope-checkbox">
+          <input
+            type="checkbox"
+            checked={copilotState.scope.selection}
+            disabled={!selection || copilotState.isAsking}
+            onChange={(e) => setCopilotState(prev => ({
+              ...prev,
+              scope: { ...prev.scope, selection: e.target.checked }
+            }))}
+          />
+          当前选区
+        </label>
+        <label className="scope-checkbox">
+          <input
+            type="checkbox"
+            checked={copilotState.scope.page}
+            disabled={copilotState.isAsking}
+            onChange={(e) => setCopilotState(prev => ({
+              ...prev,
+              scope: { ...prev.scope, page: e.target.checked }
+            }))}
+          />
+          当前页面
+        </label>
+        <label className="scope-checkbox">
+          <input
+            type="checkbox"
+            checked={copilotState.scope.document}
+            disabled={copilotState.isAsking}
+            onChange={(e) => setCopilotState(prev => ({
+              ...prev,
+              scope: { ...prev.scope, document: e.target.checked }
+            }))}
+          />
+          当前文档
+        </label>
+        <label className="scope-checkbox">
+          <input
+            type="checkbox"
+            checked={copilotState.scope.workspace}
+            disabled={copilotState.isAsking}
+            onChange={(e) => setCopilotState(prev => ({
+              ...prev,
+              scope: { ...prev.scope, workspace: e.target.checked }
+            }))}
+          />
+          工作区上下文
+        </label>
+      </div>
+
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => handleAsk()}
+        disabled={copilotState.isAsking || !copilotState.question.trim()}
+      >
+        {copilotState.isAsking ? '提问中...' : 'Ask'}
+      </Button>
+    </div>
+  );
 
   function updateWorkspaceConfig(patch: Partial<AIWorkspaceConfig>) {
     setWorkspaceConfig((current) => ({ ...current, ...patch }));
