@@ -587,6 +587,64 @@ export function ReaderAIPanel({
     </div>
   );
 
+  function toggleGroup(group: keyof CopilotState['expandedGroups']) {
+    setCopilotState(prev => ({
+      ...prev,
+      expandedGroups: {
+        ...prev.expandedGroups,
+        [group]: !prev.expandedGroups[group],
+      },
+    }));
+  }
+
+  const evidenceSection = (
+    <div className="reader-evidence-section">
+      {['entities', 'claims', 'tasks', 'sources'].map((group) => (
+        <div key={group} className="evidence-group">
+          <div className="evidence-group-header">
+            <h4>
+              {group === 'entities' && 'Entities / Concepts'}
+              {group === 'claims' && 'Key Claims'}
+              {group === 'tasks' && 'Open Questions / Tasks'}
+              {group === 'sources' && 'Sources'}
+            </h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="evidence-group-count">{copilotState.evidence[group as keyof typeof copilotState.evidence].length}</span>
+              <Button variant="ghost" size="sm" onClick={() => toggleGroup(group as keyof typeof copilotState.expandedGroups)}>
+                {copilotState.expandedGroups[group as keyof typeof copilotState.expandedGroups] ? '收起' : '展开'}
+              </Button>
+            </div>
+          </div>
+
+          {copilotState.expandedGroups[group as keyof typeof copilotState.expandedGroups] && (
+            <div className="evidence-list">
+              {copilotState.evidence[group as keyof typeof copilotState.evidence].map((item) => (
+                <div key={item.id} className="evidence-item">
+                  <div className="evidence-item-title">{item.title}</div>
+                  <div className="evidence-item-meta">
+                    {renderConfidenceBadge(item.confidence || 0)}
+                    <span className="badge">{item.kind}</span>
+                  </div>
+                  <div className="evidence-item-summary">{item.summary || item.excerpt}</div>
+                  <div className="evidence-item-source">{formatSourceSummary(item.sourceRefs)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!copilotState.expandedGroups[group as keyof typeof copilotState.expandedGroups] && copilotState.evidence[group as keyof typeof copilotState.evidence].length === 0 && (
+            <div style={{ padding: '12px', color: 'var(--osr-text-muted)', fontSize: '12px' }}>
+              {group === 'entities' && '暂无实体或概念'}
+              {group === 'claims' && '暂无关键主张'}
+              {group === 'tasks' && '暂无开放问题或任务'}
+              {group === 'sources' && '暂无来源'}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
   function updateWorkspaceConfig(patch: Partial<AIWorkspaceConfig>) {
     setWorkspaceConfig((current) => ({ ...current, ...patch }));
   }
