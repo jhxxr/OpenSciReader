@@ -15,6 +15,8 @@ type appPaths struct {
 	EncryptionKeyPath        string
 	TranslateRootDir         string
 	TranslateJobsDir         string
+	WikiRootDir              string
+	WikiJobsDir              string
 	TranslateRuntimeRootDir  string
 	TranslateRuntimeCacheDir string
 	LibraryRootDir           string
@@ -35,13 +37,15 @@ func resolveAppPaths() (appPaths, error) {
 		EncryptionKeyPath:        filepath.Join(rootDir, "config.key"),
 		TranslateRootDir:         filepath.Join(rootDir, "reader_translate"),
 		TranslateJobsDir:         filepath.Join(rootDir, "reader_translate", "jobs"),
+		WikiRootDir:              filepath.Join(rootDir, "workspace_wiki"),
+		WikiJobsDir:              filepath.Join(rootDir, "workspace_wiki", "jobs"),
 		TranslateRuntimeRootDir:  filepath.Join(rootDir, "reader_translate", "runtime"),
 		TranslateRuntimeCacheDir: filepath.Join(rootDir, "reader_translate", "runtime-cache"),
 		LibraryRootDir:           filepath.Join(rootDir, "library"),
 		WorkspacesRootDir:        filepath.Join(rootDir, "library", "workspaces"),
 	}
 
-	for _, directory := range []string{paths.RootDir, paths.TranslateJobsDir, paths.TranslateRuntimeRootDir, paths.TranslateRuntimeCacheDir, paths.LibraryRootDir, paths.WorkspacesRootDir} {
+	for _, directory := range []string{paths.RootDir, paths.TranslateJobsDir, paths.WikiJobsDir, paths.TranslateRuntimeRootDir, paths.TranslateRuntimeCacheDir, paths.LibraryRootDir, paths.WorkspacesRootDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return appPaths{}, fmt.Errorf("create app data directory %s: %w", directory, err)
 		}

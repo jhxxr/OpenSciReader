@@ -697,357 +697,6 @@ export namespace main {
 	    }
 	}
 	
-	export class WorkspaceKnowledgeSourceRef {
-	    sourceId: string;
-	    pageStart: number;
-	    pageEnd: number;
-	    excerpt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeSourceRef(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sourceId = source["sourceId"];
-	        this.pageStart = source["pageStart"];
-	        this.pageEnd = source["pageEnd"];
-	        this.excerpt = source["excerpt"];
-	    }
-	}
-	export class WorkspaceKnowledgeCandidate {
-	    id: string;
-	    title: string;
-	    type: string;
-	    summary: string;
-	    aliases: string[];
-	    entityIds: string[];
-	    priority: string;
-	    sourceId: string;
-	    pageStart: number;
-	    pageEnd: number;
-	    excerpt: string;
-	    sourceRefs: WorkspaceKnowledgeSourceRef[];
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeCandidate(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.type = source["type"];
-	        this.summary = source["summary"];
-	        this.aliases = source["aliases"];
-	        this.entityIds = source["entityIds"];
-	        this.priority = source["priority"];
-	        this.sourceId = source["sourceId"];
-	        this.pageStart = source["pageStart"];
-	        this.pageEnd = source["pageEnd"];
-	        this.excerpt = source["excerpt"];
-	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceKnowledgeClaim {
-	    id: string;
-	    workspaceId: string;
-	    title: string;
-	    type: string;
-	    summary: string;
-	    entityIds: string[];
-	    sourceRefs: WorkspaceKnowledgeSourceRef[];
-	    origin: string;
-	    status: string;
-	    confidence: number;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeClaim(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.workspaceId = source["workspaceId"];
-	        this.title = source["title"];
-	        this.type = source["type"];
-	        this.summary = source["summary"];
-	        this.entityIds = source["entityIds"];
-	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
-	        this.origin = source["origin"];
-	        this.status = source["status"];
-	        this.confidence = source["confidence"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceKnowledgeEntity {
-	    id: string;
-	    workspaceId: string;
-	    title: string;
-	    type: string;
-	    summary: string;
-	    aliases: string[];
-	    sourceRefs: WorkspaceKnowledgeSourceRef[];
-	    origin: string;
-	    status: string;
-	    confidence: number;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeEntity(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.workspaceId = source["workspaceId"];
-	        this.title = source["title"];
-	        this.type = source["type"];
-	        this.summary = source["summary"];
-	        this.aliases = source["aliases"];
-	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
-	        this.origin = source["origin"];
-	        this.status = source["status"];
-	        this.confidence = source["confidence"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceKnowledgeEvidenceHit {
-	    kind: string;
-	    id: string;
-	    title: string;
-	    summary: string;
-	    excerpt: string;
-	    sourceRefs: WorkspaceKnowledgeSourceRef[];
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeEvidenceHit(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.kind = source["kind"];
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.summary = source["summary"];
-	        this.excerpt = source["excerpt"];
-	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceKnowledgePromotionInput {
-	    workspaceId: string;
-	    candidates: WorkspaceKnowledgeCandidate[];
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgePromotionInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.workspaceId = source["workspaceId"];
-	        this.candidates = this.convertValues(source["candidates"], WorkspaceKnowledgeCandidate);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceKnowledgeQueryInput {
-	    workspaceId: string;
-	    providerId: number;
-	    modelId: number;
-	    question: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeQueryInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.workspaceId = source["workspaceId"];
-	        this.providerId = source["providerId"];
-	        this.modelId = source["modelId"];
-	        this.question = source["question"];
-	    }
-	}
-	export class WorkspaceKnowledgeQueryResult {
-	    answer: string;
-	    evidence: WorkspaceKnowledgeEvidenceHit[];
-	    candidates: WorkspaceKnowledgeCandidate[];
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeQueryResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.answer = source["answer"];
-	        this.evidence = this.convertValues(source["evidence"], WorkspaceKnowledgeEvidenceHit);
-	        this.candidates = this.convertValues(source["candidates"], WorkspaceKnowledgeCandidate);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	export class WorkspaceKnowledgeTask {
-	    id: string;
-	    workspaceId: string;
-	    title: string;
-	    type: string;
-	    summary: string;
-	    priority: string;
-	    sourceRefs: WorkspaceKnowledgeSourceRef[];
-	    origin: string;
-	    status: string;
-	    confidence: number;
-	    createdAt: string;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceKnowledgeTask(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.workspaceId = source["workspaceId"];
-	        this.title = source["title"];
-	        this.type = source["type"];
-	        this.summary = source["summary"];
-	        this.priority = source["priority"];
-	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
-	        this.origin = source["origin"];
-	        this.status = source["status"];
-	        this.confidence = source["confidence"];
-	        this.createdAt = source["createdAt"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class WorkspaceUpsertInput {
 	    id: string;
 	    name: string;
@@ -1066,18 +715,85 @@ export namespace main {
 	        this.color = source["color"];
 	    }
 	}
-	export class WorkspaceWikiScanJob {
-	    id: number;
+	export class WorkspaceWikiPage {
+	    id: string;
 	    workspaceId: string;
-	    documentId: string;
+	    sourceDocumentId: string;
+	    title: string;
+	    slug: string;
+	    kind: string;
+	    markdownPath: string;
+	    summary: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceWikiPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.sourceDocumentId = source["sourceDocumentId"];
+	        this.title = source["title"];
+	        this.slug = source["slug"];
+	        this.kind = source["kind"];
+	        this.markdownPath = source["markdownPath"];
+	        this.summary = source["summary"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class WorkspaceWikiPageContent {
+	    page: WorkspaceWikiPage;
+	    markdown: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceWikiPageContent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.page = this.convertValues(source["page"], WorkspaceWikiPage);
+	        this.markdown = source["markdown"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WorkspaceWikiScanJob {
+	    jobId: string;
+	    workspaceId: string;
 	    status: string;
+	    totalItems: number;
+	    processedItems: number;
+	    failedItems: number;
+	    currentItem: string;
 	    currentStage: string;
 	    message: string;
+	    overallProgress: number;
 	    providerId: number;
 	    modelId: number;
+	    error?: string;
 	    startedAt: string;
-	    finishedAt: string;
 	    updatedAt: string;
+	    finishedAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceWikiScanJob(source);
@@ -1085,22 +801,26 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
+	        this.jobId = source["jobId"];
 	        this.workspaceId = source["workspaceId"];
-	        this.documentId = source["documentId"];
 	        this.status = source["status"];
+	        this.totalItems = source["totalItems"];
+	        this.processedItems = source["processedItems"];
+	        this.failedItems = source["failedItems"];
+	        this.currentItem = source["currentItem"];
 	        this.currentStage = source["currentStage"];
 	        this.message = source["message"];
+	        this.overallProgress = source["overallProgress"];
 	        this.providerId = source["providerId"];
 	        this.modelId = source["modelId"];
+	        this.error = source["error"];
 	        this.startedAt = source["startedAt"];
-	        this.finishedAt = source["finishedAt"];
 	        this.updatedAt = source["updatedAt"];
+	        this.finishedAt = source["finishedAt"];
 	    }
 	}
 	export class WorkspaceWikiScanStartInput {
 	    workspaceId: string;
-	    documentId: string;
 	    providerId: number;
 	    modelId: number;
 	
@@ -1111,7 +831,6 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.workspaceId = source["workspaceId"];
-	        this.documentId = source["documentId"];
 	        this.providerId = source["providerId"];
 	        this.modelId = source["modelId"];
 	    }

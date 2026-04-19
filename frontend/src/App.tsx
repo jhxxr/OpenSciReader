@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNod
 import { BookOpen, FileText, Home, Plus, Settings2, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import './App.css';
 import { configApi } from './api/config';
-import { workspaceKnowledgeApi } from './api/workspaceKnowledge';
 import { workspaceApi } from './api/workspace';
+import { workspaceWikiApi } from './api/workspaceWiki';
 import { ModelDiscoveryModal } from './components/ModelDiscoveryModal';
 import { HomePage } from './components/HomePage';
 import { ReaderTab } from './components/ReaderTab';
+import { WorkspaceTab } from './components/WorkspaceTab';
 import { Button } from './components/ui/Button';
 import { getErrorMessage } from './lib/errors';
 import {
@@ -34,11 +35,7 @@ import {
   type ProviderRecord,
   type ProviderUpsertInput,
 } from './types/config';
-import type {
-  WorkspaceKnowledgeClaim,
-  WorkspaceKnowledgeEntity,
-  WorkspaceKnowledgeTask,
-} from './types/workspaceKnowledge';
+import type { WorkspaceWikiPage, WorkspaceWikiPageContent, WorkspaceWikiScanJob } from './types/workspaceWiki';
 
 const EMPTY_LLM_FORM: ProviderUpsertInput = {
   name: '',
@@ -76,26 +73,20 @@ const EMPTY_MODEL_FORM: ModelUpsertInput = {
   contextWindow: 0,
 };
 
-interface WorkspaceTabKnowledgeState {
-  entities: WorkspaceKnowledgeEntity[];
-  claims: WorkspaceKnowledgeClaim[];
-  tasks: WorkspaceKnowledgeTask[];
-  isLoading: boolean;
-  error: string | null;
-  hasLoaded: boolean;
-}
-
-const EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE: WorkspaceTabKnowledgeState = {
-  entities: [],
-  claims: [],
-  tasks: [],
-  isLoading: false,
-  error: null,
-  hasLoaded: false,
-};
-
 function normalizeModelKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function currentSelectedPageId(
+  workspaceId: string,
+  pages: WorkspaceWikiPage[],
+  state: Record<string, { selectedPageId: string | null }>,
+): string | null {
+  const existing = state[workspaceId]?.selectedPageId;
+  if (existing && pages.some((page) => page.id === existing)) {
+    return existing;
+  }
+  return pages[0]?.id ?? null;
 }
 
 function isDeepLXTranslateEndpoint(value: string): boolean {
@@ -146,72 +137,20 @@ export default function App() {
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [runtimeImportPath, setRuntimeImportPath] = useState('');
   const [runtimeImportProgress, setRuntimeImportProgress] = useState<PDFTranslateRuntimeImportProgress | null>(null);
-  const [workspaceTabKnowledge, setWorkspaceTabKnowledge] = useState<Record<string, WorkspaceTabKnowledgeState>>({});
-
-  const ensureWorkspaceTabKnowledge = useCallback(
-    async (workspaceId: string, options?: { force?: boolean }) => {
-      const normalizedWorkspaceId = workspaceId.trim();
-      if (normalizedWorkspaceId === '') {
-        return;
-      }
-
-      let shouldLoad = true;
-      setWorkspaceTabKnowledge((current) => {
-        const existing = current[normalizedWorkspaceId];
-        if (existing?.isLoading || (existing?.hasLoaded && !options?.force)) {
-          shouldLoad = false;
-          return current;
-        }
-
-        return {
-          ...current,
-          [normalizedWorkspaceId]: {
-            entities: existing?.entities ?? [],
-            claims: existing?.claims ?? [],
-            tasks: existing?.tasks ?? [],
-            isLoading: true,
-            error: null,
-            hasLoaded: existing?.hasLoaded ?? false,
-          },
-        };
-      });
-
-      if (!shouldLoad) {
-        return;
-      }
-
-      try {
-        const [entities, claims, tasks] = await Promise.all([
-          workspaceKnowledgeApi.listEntities(normalizedWorkspaceId),
-          workspaceKnowledgeApi.listClaims(normalizedWorkspaceId),
-          workspaceKnowledgeApi.listTasks(normalizedWorkspaceId),
-        ]);
-
-        setWorkspaceTabKnowledge((current) => ({
-          ...current,
-          [normalizedWorkspaceId]: {
-            entities,
-            claims,
-            tasks,
-            isLoading: false,
-            error: null,
-            hasLoaded: true,
-          },
-        }));
-      } catch (error) {
-        setWorkspaceTabKnowledge((current) => ({
-          ...current,
-          [normalizedWorkspaceId]: {
-            ...(current[normalizedWorkspaceId] ?? EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE),
-            isLoading: false,
-            error: getErrorMessage(error, '加载工作区记忆失败'),
-            hasLoaded: true,
-          },
-        }));
-      }
-    },
-    [],
-  );
+  const [workspaceTabDocuments, setWorkspaceTabDocuments] = useState<Record<string, { documents: import('./types/workspace').DocumentRecord[]; isLoading: boolean; deletingDocumentId: string | null }>>({});
+  const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
+    pages: WorkspaceWikiPage[];
+    selectedPageId: string | null;
+    pageContent: WorkspaceWikiPageContent | null;
+    isLoadingPages: boolean;
+    isLoadingPageContent: boolean;
+    activeJob: WorkspaceWikiScanJob | null;
+    wikiError: string | null;
+    isStarting: boolean;
+    isCancelling: boolean;
+    isDeleting: boolean;
+    unsubscribe?: (() => void) | null;
+  }>>({});
 
   useEffect(() => {
     void loadConfig();
@@ -224,12 +163,6 @@ export default function App() {
   useEffect(() => {
     void workspace.loadWorkspaces();
   }, [workspace.loadWorkspaces]);
-
-  useEffect(() => {
-    if (workspace.activeWorkspaceId) {
-      void ensureWorkspaceTabKnowledge(workspace.activeWorkspaceId);
-    }
-  }, [ensureWorkspaceTabKnowledge, workspace.activeWorkspaceId]);
 
   useEffect(() => configApi.subscribePDFTranslateRuntimeImportProgress(setRuntimeImportProgress), []);
 
@@ -280,24 +213,121 @@ export default function App() {
     () => new Set(selectedModelProviderModels.map((item) => normalizeModelKey(item.modelId))),
     [selectedModelProviderModels],
   );
-  const activeWorkspaceTabKnowledge = useMemo(
-    () =>
-      workspace.activeWorkspaceId
-        ? (workspaceTabKnowledge[workspace.activeWorkspaceId] ?? EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE)
-        : EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE,
-    [workspace.activeWorkspaceId, workspaceTabKnowledge],
-  );
 
   const discoveryProviderConfig = useMemo(
     () => llmProviderConfigs.find((item) => item.provider.id === discoveryProviderId) ?? null,
     [llmProviderConfigs, discoveryProviderId],
   );
-  const handleRefreshWorkspaceKnowledge = useCallback(async () => {
-    if (!workspace.activeWorkspaceId) {
-      return;
+
+  const ensureWorkspaceTabDocuments = useCallback(async (workspaceId: string) => {
+    setWorkspaceTabDocuments((current) => ({
+      ...current,
+      [workspaceId]: {
+        documents: current[workspaceId]?.documents ?? [],
+        isLoading: true,
+        deletingDocumentId: current[workspaceId]?.deletingDocumentId ?? null,
+      },
+    }));
+    try {
+      const documents = await workspaceApi.listDocuments(workspaceId);
+      setWorkspaceTabDocuments((current) => ({
+        ...current,
+        [workspaceId]: {
+          documents,
+          isLoading: false,
+          deletingDocumentId: current[workspaceId]?.deletingDocumentId ?? null,
+        },
+      }));
+    } catch {
+      setWorkspaceTabDocuments((current) => ({
+        ...current,
+        [workspaceId]: {
+          documents: current[workspaceId]?.documents ?? [],
+          isLoading: false,
+          deletingDocumentId: current[workspaceId]?.deletingDocumentId ?? null,
+        },
+      }));
     }
-    await ensureWorkspaceTabKnowledge(workspace.activeWorkspaceId, { force: true });
-  }, [ensureWorkspaceTabKnowledge, workspace.activeWorkspaceId]);
+  }, []);
+
+  const ensureWorkspaceTabWiki = useCallback(async (workspaceId: string) => {
+    setWorkspaceTabWiki((current) => ({
+      ...current,
+      [workspaceId]: {
+        pages: current[workspaceId]?.pages ?? [],
+        selectedPageId: current[workspaceId]?.selectedPageId ?? null,
+        pageContent: current[workspaceId]?.pageContent ?? null,
+        isLoadingPages: true,
+        isLoadingPageContent: current[workspaceId]?.isLoadingPageContent ?? false,
+        activeJob: current[workspaceId]?.activeJob ?? null,
+        wikiError: null,
+        isStarting: current[workspaceId]?.isStarting ?? false,
+        isCancelling: current[workspaceId]?.isCancelling ?? false,
+        isDeleting: current[workspaceId]?.isDeleting ?? false,
+        unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+      },
+    }));
+    try {
+      const [pages, jobs] = await Promise.all([
+        workspaceWikiApi.listPages(workspaceId),
+        workspaceWikiApi.listJobs(),
+      ]);
+      const activeJob = jobs.find((job) => job.workspaceId === workspaceId && (job.status === 'queued' || job.status === 'running')) ?? null;
+      const selectedPageId = currentSelectedPageId(workspaceId, pages, workspaceTabWiki);
+      setWorkspaceTabWiki((current) => ({
+        ...current,
+        [workspaceId]: {
+          pages,
+          selectedPageId,
+          pageContent: selectedPageId && current[workspaceId]?.pageContent?.page.id === selectedPageId ? current[workspaceId]?.pageContent ?? null : null,
+          isLoadingPages: false,
+          isLoadingPageContent: false,
+          activeJob,
+          wikiError: null,
+          isStarting: current[workspaceId]?.isStarting ?? false,
+          isCancelling: current[workspaceId]?.isCancelling ?? false,
+          isDeleting: current[workspaceId]?.isDeleting ?? false,
+          unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+        },
+      }));
+      if (selectedPageId) {
+        const content = await workspaceWikiApi.getPage(selectedPageId);
+        setWorkspaceTabWiki((current) => ({
+          ...current,
+          [workspaceId]: {
+            pages: current[workspaceId]?.pages ?? pages,
+            selectedPageId,
+            pageContent: content,
+            isLoadingPages: false,
+            isLoadingPageContent: false,
+            activeJob: current[workspaceId]?.activeJob ?? activeJob,
+            wikiError: null,
+            isStarting: current[workspaceId]?.isStarting ?? false,
+            isCancelling: current[workspaceId]?.isCancelling ?? false,
+            isDeleting: current[workspaceId]?.isDeleting ?? false,
+            unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+          },
+        }));
+      }
+    } catch (error) {
+      setWorkspaceTabWiki((current) => ({
+        ...current,
+        [workspaceId]: {
+          pages: current[workspaceId]?.pages ?? [],
+          selectedPageId: current[workspaceId]?.selectedPageId ?? null,
+          pageContent: current[workspaceId]?.pageContent ?? null,
+          isLoadingPages: false,
+          isLoadingPageContent: false,
+          activeJob: current[workspaceId]?.activeJob ?? null,
+          wikiError: error instanceof Error ? error.message : '加载 wiki 失败',
+          isStarting: current[workspaceId]?.isStarting ?? false,
+          isCancelling: current[workspaceId]?.isCancelling ?? false,
+          isDeleting: current[workspaceId]?.isDeleting ?? false,
+          unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+        },
+      }));
+    }
+  }, [workspaceTabWiki]);
 
   const handleOpenPdfTab = useCallback(
     (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => {
@@ -305,6 +335,7 @@ export default function App() {
         id: item.id,
         title: item.title,
         pdfPath: item.pdfPath,
+        type: 'document',
         workspaceId: item.workspaceId,
         documentId: item.documentId,
         sourceKind: item.sourceKind,
@@ -313,6 +344,27 @@ export default function App() {
       });
     },
     [openTab],
+  );
+
+  const handleOpenWorkspaceTab = useCallback(
+    async (workspaceId: string) => {
+      const item = workspace.workspaces.find((entry) => entry.id === workspaceId);
+      if (!item) {
+        return;
+      }
+      await Promise.all([
+        ensureWorkspaceTabDocuments(item.id),
+        ensureWorkspaceTabWiki(item.id),
+      ]);
+      openTab({
+        id: `workspace:${item.id}`,
+        title: item.name,
+        pdfPath: null,
+        type: 'workspace',
+        workspaceId: item.id,
+      });
+    },
+    [ensureWorkspaceTabDocuments, ensureWorkspaceTabWiki, openTab, workspace.workspaces],
   );
 
   const handleImportZoteroItem = useCallback(async (item: { id: string; title: string; pdfPath: string; citeKey: string }) => {
@@ -526,38 +578,6 @@ export default function App() {
           <span>OpenSciReader</span>
         </div>
         <div className="app-titlebar-actions">
-          <select
-            className="workspace-switcher"
-            value={workspace.activeWorkspaceId ?? ''}
-            onChange={(event) => void workspace.selectWorkspace(event.target.value)}
-            disabled={workspace.isLoading || workspace.workspaces.length === 0}
-          >
-            {workspace.workspaces.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={async () => {
-              const name = typeof window === 'undefined' ? '' : window.prompt('请输入工作区名称', 'New Workspace') ?? '';
-              if (!name.trim()) {
-                return;
-              }
-              try {
-                await workspace.createWorkspace({
-                  name: name.trim(),
-                  description: '',
-                  color: '#6366f1',
-                });
-              } catch {}
-            }}
-          >
-            <Plus size={14} />
-            新建工作区
-          </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => setConfigOpen(true)}>
             <Settings2 size={16} />
           </Button>
@@ -626,17 +646,264 @@ export default function App() {
             }}
             onImportZoteroItem={handleImportZoteroItem}
             onOpenPdf={handleOpenPdfTab}
-            workspaceKnowledgeEntities={activeWorkspaceTabKnowledge.entities}
-            workspaceKnowledgeClaims={activeWorkspaceTabKnowledge.claims}
-            workspaceKnowledgeTasks={activeWorkspaceTabKnowledge.tasks}
-            isWorkspaceKnowledgeLoading={activeWorkspaceTabKnowledge.isLoading}
-            workspaceKnowledgeError={activeWorkspaceTabKnowledge.error}
-            onRefreshWorkspaceKnowledge={handleRefreshWorkspaceKnowledge}
+            onEnterWorkspace={async (workspaceId) => {
+              await workspace.selectWorkspace(workspaceId);
+              await handleOpenWorkspaceTab(workspaceId);
+            }}
+            onCreateWorkspace={async () => {
+              const name = typeof window === 'undefined' ? '' : window.prompt('请输入工作区名称', 'New Workspace') ?? '';
+              if (!name.trim()) {
+                return;
+              }
+              try {
+                const createdWorkspace = await workspace.createWorkspace({
+                  name: name.trim(),
+                  description: '',
+                  color: '#6366f1',
+                });
+                await handleOpenWorkspaceTab(createdWorkspace.id);
+              } catch {}
+            }}
           />
         ) : (
           tabs
             .filter((tab) => tab.id === activeTabId)
-            .map((tab) => <ReaderTab key={tab.id} tab={tab} providerConfigs={providerConfigs} />)
+            .map((tab) =>
+              tab.type === 'workspace' ? (
+                <WorkspaceTab
+                  key={tab.id}
+                  workspace={workspace.workspaces.find((item) => item.id === tab.workspaceId) ?? null}
+                  documents={tab.workspaceId ? workspaceTabDocuments[tab.workspaceId]?.documents ?? [] : []}
+                  isImporting={workspace.isImporting && tab.workspaceId === workspace.activeWorkspaceId}
+                  isLoadingDocuments={tab.workspaceId ? workspaceTabDocuments[tab.workspaceId]?.isLoading ?? false : false}
+                  deletingDocumentId={tab.workspaceId ? workspaceTabDocuments[tab.workspaceId]?.deletingDocumentId ?? null : null}
+                  llmProviderConfigs={llmProviderConfigs}
+                  wikiPages={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.pages ?? [] : []}
+                  selectedWikiPageId={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.selectedPageId ?? null : null}
+                  wikiPageContent={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.pageContent ?? null : null}
+                  isLoadingWikiPages={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isLoadingPages ?? false : false}
+                  isLoadingWikiPageContent={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isLoadingPageContent ?? false : false}
+                  activeWikiJob={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.activeJob ?? null : null}
+                  wikiError={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.wikiError ?? null : null}
+                  isStartingWikiScan={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isStarting ?? false : false}
+                  isCancellingWikiScan={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isCancelling ?? false : false}
+                  isDeletingWikiPages={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isDeleting ?? false : false}
+                  onImportFiles={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    await workspace.selectWorkspace(tab.workspaceId);
+                    const selected = await workspaceApi.selectLocalFiles?.();
+                    if (selected?.length) {
+                      await workspace.importFiles(selected);
+                      await ensureWorkspaceTabDocuments(tab.workspaceId);
+                    }
+                  }}
+                  onRefreshDocuments={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    await ensureWorkspaceTabDocuments(tab.workspaceId);
+                  }}
+                  onOpenPdf={(document) => handleOpenPdfTab({
+                    id: document.id,
+                    title: document.title,
+                    pdfPath: document.primaryPdfPath ?? null,
+                    workspaceId: document.workspaceId,
+                    documentId: document.id,
+                    sourceKind: 'workspace_document',
+                  })}
+                  onDeleteDocument={async (document) => {
+                    setWorkspaceTabDocuments((current) => ({
+                      ...current,
+                      [document.workspaceId]: {
+                        documents: current[document.workspaceId]?.documents ?? [],
+                        isLoading: current[document.workspaceId]?.isLoading ?? false,
+                        deletingDocumentId: document.id,
+                      },
+                    }));
+                    await workspace.selectWorkspace(document.workspaceId);
+                    await workspace.deleteDocument(document.id);
+                    await Promise.all([
+                      ensureWorkspaceTabDocuments(document.workspaceId),
+                      ensureWorkspaceTabWiki(document.workspaceId),
+                    ]);
+                    setWorkspaceTabDocuments((current) => ({
+                      ...current,
+                      [document.workspaceId]: {
+                        documents: current[document.workspaceId]?.documents ?? [],
+                        isLoading: current[document.workspaceId]?.isLoading ?? false,
+                        deletingDocumentId: null,
+                      },
+                    }));
+                  }}
+                  onStartWikiScan={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    const provider = llmProviderConfigs.find((item) => item.models.length > 0);
+                    const model = provider?.models[0];
+                    if (!provider || !model) {
+                      setWorkspaceTabWiki((current) => ({
+                        ...current,
+                        [tab.workspaceId!]: {
+                          pages: current[tab.workspaceId!]?.pages ?? [],
+                          selectedPageId: current[tab.workspaceId!]?.selectedPageId ?? null,
+                          pageContent: current[tab.workspaceId!]?.pageContent ?? null,
+                          isLoadingPages: false,
+                          isLoadingPageContent: false,
+                          activeJob: current[tab.workspaceId!]?.activeJob ?? null,
+                          wikiError: '请先配置 LLM provider 和 model',
+                          isStarting: false,
+                          isCancelling: false,
+                          isDeleting: false,
+                          unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
+                        },
+                      }));
+                      return;
+                    }
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        pages: current[tab.workspaceId!]?.pages ?? [],
+                        selectedPageId: current[tab.workspaceId!]?.selectedPageId ?? null,
+                        pageContent: current[tab.workspaceId!]?.pageContent ?? null,
+                        isLoadingPages: false,
+                        isLoadingPageContent: false,
+                        activeJob: current[tab.workspaceId!]?.activeJob ?? null,
+                        wikiError: null,
+                        isStarting: true,
+                        isCancelling: current[tab.workspaceId!]?.isCancelling ?? false,
+                        isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
+                        unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
+                      },
+                    }));
+                    const job = await workspaceWikiApi.start({ workspaceId: tab.workspaceId, providerId: provider.provider.id, modelId: model.id });
+                    const unsubscribe = workspaceWikiApi.subscribe(job.jobId, (event) => {
+                      setWorkspaceTabWiki((current) => ({
+                        ...current,
+                        [tab.workspaceId!]: {
+                          pages: current[tab.workspaceId!]?.pages ?? [],
+                          selectedPageId: current[tab.workspaceId!]?.selectedPageId ?? null,
+                          pageContent: current[tab.workspaceId!]?.pageContent ?? null,
+                          isLoadingPages: false,
+                          isLoadingPageContent: false,
+                          activeJob: event.status,
+                          wikiError: event.error ?? null,
+                          isStarting: false,
+                          isCancelling: false,
+                          isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
+                          unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? unsubscribe,
+                        },
+                      }));
+                      if (event.status.status === 'completed' || event.status.status === 'failed' || event.status.status === 'cancelled') {
+                        unsubscribe();
+                        void ensureWorkspaceTabWiki(tab.workspaceId!);
+                      }
+                    });
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        pages: current[tab.workspaceId!]?.pages ?? [],
+                        selectedPageId: current[tab.workspaceId!]?.selectedPageId ?? null,
+                        pageContent: current[tab.workspaceId!]?.pageContent ?? null,
+                        isLoadingPages: false,
+                        isLoadingPageContent: false,
+                        activeJob: job,
+                        wikiError: null,
+                        isStarting: false,
+                        isCancelling: false,
+                        isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
+                        unsubscribe,
+                      },
+                    }));
+                  }}
+                  onCancelWikiScan={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    const job = workspaceTabWiki[tab.workspaceId]?.activeJob;
+                    if (!job) {
+                      return;
+                    }
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        ...current[tab.workspaceId!],
+                        isCancelling: true,
+                      },
+                    }));
+                    await workspaceWikiApi.cancel(job.jobId);
+                    await ensureWorkspaceTabWiki(tab.workspaceId);
+                  }}
+                  onRefreshWikiPages={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    await ensureWorkspaceTabWiki(tab.workspaceId);
+                  }}
+                  onSelectWikiPage={async (pageId) => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        ...current[tab.workspaceId!],
+                        selectedPageId: pageId,
+                        isLoadingPageContent: true,
+                        wikiError: null,
+                      },
+                    }));
+                    try {
+                      const content = await workspaceWikiApi.getPage(pageId);
+                      setWorkspaceTabWiki((current) => ({
+                        ...current,
+                        [tab.workspaceId!]: {
+                          ...current[tab.workspaceId!],
+                          selectedPageId: pageId,
+                          pageContent: content,
+                          isLoadingPageContent: false,
+                        },
+                      }));
+                    } catch (error) {
+                      setWorkspaceTabWiki((current) => ({
+                        ...current,
+                        [tab.workspaceId!]: {
+                          ...current[tab.workspaceId!],
+                          isLoadingPageContent: false,
+                          wikiError: error instanceof Error ? error.message : '加载 wiki 页面失败',
+                        },
+                      }));
+                    }
+                  }}
+                  onDeleteWikiPages={async () => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        ...current[tab.workspaceId!],
+                        isDeleting: true,
+                        wikiError: null,
+                      },
+                    }));
+                    await workspaceWikiApi.deletePages(tab.workspaceId);
+                    await ensureWorkspaceTabWiki(tab.workspaceId);
+                    setWorkspaceTabWiki((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: {
+                        ...current[tab.workspaceId!],
+                        isDeleting: false,
+                      },
+                    }));
+                  }}
+                />
+              ) : (
+                <ReaderTab key={tab.id} tab={tab} providerConfigs={providerConfigs} />
+              ),
+            )
         )}
       </div>
 

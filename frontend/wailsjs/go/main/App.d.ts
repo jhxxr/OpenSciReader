@@ -5,6 +5,8 @@ import {main} from '../models';
 
 export function CancelPDFTranslate(arg1:string):Promise<translator.JobSnapshot>;
 
+export function CancelWorkspaceWikiScan(arg1:string):Promise<main.WorkspaceWikiScanJob>;
+
 export function CreateWorkspace(arg1:main.WorkspaceUpsertInput):Promise<main.Workspace>;
 
 export function DeleteChatHistory(arg1:number):Promise<void>;
@@ -16,6 +18,10 @@ export function DeleteModel(arg1:number):Promise<void>;
 export function DeletePDFTranslateJob(arg1:string):Promise<void>;
 
 export function DeleteProvider(arg1:number):Promise<void>;
+
+export function DeleteWorkspaceWikiPages(arg1:string):Promise<void>;
+
+export function DeleteWorkspaceWikiScanJob(arg1:string):Promise<void>;
 
 export function ExtractPDFMarkdown(arg1:string):Promise<main.PDFMarkdownPayload>;
 
@@ -35,6 +41,10 @@ export function GetPDFTranslateRuntimeStatus():Promise<main.PDFTranslateRuntimeC
 
 export function GetPDFTranslateStatus(arg1:string):Promise<translator.JobSnapshot>;
 
+export function GetWorkspaceWikiPage(arg1:string):Promise<main.WorkspaceWikiPageContent>;
+
+export function GetWorkspaceWikiScanJob(arg1:string):Promise<main.WorkspaceWikiScanJob>;
+
 export function ImportFiles(arg1:main.ImportFilesInput):Promise<main.ImportFilesResult>;
 
 export function ImportPDFTranslateRuntime(arg1:string):Promise<main.PDFTranslateRuntimeImportResult>;
@@ -49,21 +59,15 @@ export function ListPDFTranslateJobs():Promise<Array<translator.JobSnapshot>>;
 
 export function ListReaderNotes(arg1:string,arg2:string,arg3:string):Promise<Array<main.ReaderNoteEntry>>;
 
-export function ListWorkspaceKnowledgeClaims(arg1:string):Promise<Array<main.WorkspaceKnowledgeClaim>>;
+export function ListWorkspaceWikiPages(arg1:string):Promise<Array<main.WorkspaceWikiPage>>;
 
-export function ListWorkspaceKnowledgeEntities(arg1:string):Promise<Array<main.WorkspaceKnowledgeEntity>>;
-
-export function ListWorkspaceKnowledgeTasks(arg1:string):Promise<Array<main.WorkspaceKnowledgeTask>>;
+export function ListWorkspaceWikiScanJobs():Promise<Array<main.WorkspaceWikiScanJob>>;
 
 export function ListWorkspaces():Promise<Array<main.Workspace>>;
 
 export function LoadPDFDocument(arg1:string):Promise<main.PDFDocumentPayload>;
 
-export function PromoteWorkspaceKnowledge(arg1:main.WorkspaceKnowledgePromotionInput):Promise<void>;
-
 export function ProxyTranslation(arg1:number,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
-
-export function QueryWorkspaceKnowledge(arg1:main.WorkspaceKnowledgeQueryInput):Promise<main.WorkspaceKnowledgeQueryResult>;
 
 export function RemovePDFTranslateRuntime():Promise<void>;
 

@@ -6,6 +6,10 @@ export function CancelPDFTranslate(arg1) {
   return window['go']['main']['App']['CancelPDFTranslate'](arg1);
 }
 
+export function CancelWorkspaceWikiScan(arg1) {
+  return window['go']['main']['App']['CancelWorkspaceWikiScan'](arg1);
+}
+
 export function CreateWorkspace(arg1) {
   return window['go']['main']['App']['CreateWorkspace'](arg1);
 }
@@ -28,6 +32,14 @@ export function DeletePDFTranslateJob(arg1) {
 
 export function DeleteProvider(arg1) {
   return window['go']['main']['App']['DeleteProvider'](arg1);
+}
+
+export function DeleteWorkspaceWikiPages(arg1) {
+  return window['go']['main']['App']['DeleteWorkspaceWikiPages'](arg1);
+}
+
+export function DeleteWorkspaceWikiScanJob(arg1) {
+  return window['go']['main']['App']['DeleteWorkspaceWikiScanJob'](arg1);
 }
 
 export function ExtractPDFMarkdown(arg1) {
@@ -66,6 +78,14 @@ export function GetPDFTranslateStatus(arg1) {
   return window['go']['main']['App']['GetPDFTranslateStatus'](arg1);
 }
 
+export function GetWorkspaceWikiPage(arg1) {
+  return window['go']['main']['App']['GetWorkspaceWikiPage'](arg1);
+}
+
+export function GetWorkspaceWikiScanJob(arg1) {
+  return window['go']['main']['App']['GetWorkspaceWikiScanJob'](arg1);
+}
+
 export function ImportFiles(arg1) {
   return window['go']['main']['App']['ImportFiles'](arg1);
 }
@@ -94,16 +114,12 @@ export function ListReaderNotes(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListReaderNotes'](arg1, arg2, arg3);
 }
 
-export function ListWorkspaceKnowledgeClaims(arg1) {
-  return window['go']['main']['App']['ListWorkspaceKnowledgeClaims'](arg1);
+export function ListWorkspaceWikiPages(arg1) {
+  return window['go']['main']['App']['ListWorkspaceWikiPages'](arg1);
 }
 
-export function ListWorkspaceKnowledgeEntities(arg1) {
-  return window['go']['main']['App']['ListWorkspaceKnowledgeEntities'](arg1);
-}
-
-export function ListWorkspaceKnowledgeTasks(arg1) {
-  return window['go']['main']['App']['ListWorkspaceKnowledgeTasks'](arg1);
+export function ListWorkspaceWikiScanJobs() {
+  return window['go']['main']['App']['ListWorkspaceWikiScanJobs']();
 }
 
 export function ListWorkspaces() {
@@ -114,16 +130,8 @@ export function LoadPDFDocument(arg1) {
   return window['go']['main']['App']['LoadPDFDocument'](arg1);
 }
 
-export function PromoteWorkspaceKnowledge(arg1) {
-  return window['go']['main']['App']['PromoteWorkspaceKnowledge'](arg1);
-}
-
 export function ProxyTranslation(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ProxyTranslation'](arg1, arg2, arg3, arg4, arg5);
-}
-
-export function QueryWorkspaceKnowledge(arg1) {
-  return window['go']['main']['App']['QueryWorkspaceKnowledge'](arg1);
 }
 
 export function RemovePDFTranslateRuntime() {

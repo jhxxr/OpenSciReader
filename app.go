@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"OpenSciReader/internal/translator"
@@ -11,15 +12,14 @@ import (
 
 // App struct
 type App struct {
-	ctx                context.Context
-	store              *configStore
-	paths              appPaths
-	zotero             *zoteroService
-	gateway            *gatewayService
-	pdf                *pdfService
-	workspaceWiki      *workspaceWikiService
-	workspaceKnowledge *workspaceKnowledgeQueryService
-	translator         *translator.Manager
+	ctx        context.Context
+	store      *configStore
+	paths      appPaths
+	zotero     *zoteroService
+	gateway    *gatewayService
+	pdf        *pdfService
+	translator *translator.Manager
+	wiki       *workspaceWikiScanRunner
 }
 
 // NewApp creates a new App application struct
@@ -47,9 +47,8 @@ func (a *App) startup(ctx context.Context) {
 	a.zotero = newZoteroService()
 	a.gateway = newGatewayService(store)
 	a.pdf = newPDFService(store)
-	a.workspaceWiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
-	a.workspaceKnowledge = newWorkspaceKnowledgeQueryService(paths, a.gateway)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
+	a.wiki = newWorkspaceWikiScanRunner(a)
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -177,6 +176,58 @@ func (a *App) DeleteDocument(workspaceID, documentID string) error {
 	return a.store.DeleteDocument(a.ctx, a.paths, workspaceID, documentID)
 }
 
+func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
+	return a.wiki.Start(a.ctx, input)
+}
+
+func (a *App) GetWorkspaceWikiScanJob(jobID string) (WorkspaceWikiScanJob, error) {
+	return a.store.GetWorkspaceWikiScanJob(a.ctx, jobID)
+}
+
+func (a *App) ListWorkspaceWikiScanJobs() ([]WorkspaceWikiScanJob, error) {
+	return a.store.ListWorkspaceWikiScanJobs(a.ctx)
+}
+
+func (a *App) CancelWorkspaceWikiScan(jobID string) (WorkspaceWikiScanJob, error) {
+	return a.wiki.Cancel(a.ctx, jobID)
+}
+
+func (a *App) DeleteWorkspaceWikiScanJob(jobID string) error {
+	return a.store.DeleteWorkspaceWikiScanJob(a.ctx, jobID)
+}
+
+func (a *App) ListWorkspaceWikiPages(workspaceID string) ([]WorkspaceWikiPage, error) {
+	return a.store.ListWorkspaceWikiPages(a.ctx, workspaceID)
+}
+
+func (a *App) GetWorkspaceWikiPage(pageID string) (WorkspaceWikiPageContent, error) {
+	page, err := a.store.GetWorkspaceWikiPage(a.ctx, pageID)
+	if err != nil {
+		return WorkspaceWikiPageContent{}, err
+	}
+	data, err := os.ReadFile(page.MarkdownPath)
+	if err != nil {
+		return WorkspaceWikiPageContent{}, fmt.Errorf("read workspace wiki markdown: %w", err)
+	}
+	return WorkspaceWikiPageContent{Page: page, Markdown: string(data)}, nil
+}
+
+func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
+	pages, err := a.store.ListWorkspaceWikiPages(a.ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	for _, page := range pages {
+		if strings.TrimSpace(page.MarkdownPath) == "" {
+			continue
+		}
+		if err := os.Remove(page.MarkdownPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove workspace wiki page file: %w", err)
+		}
+	}
+	return a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID)
+}
+
 func (a *App) GetCollections(source string) ([]CollectionTree, error) {
 	return a.zotero.GetCollections(a.ctx, source)
 }
@@ -195,48 +246,6 @@ func (a *App) LoadPDFDocument(pdfPath string) (PDFDocumentPayload, error) {
 
 func (a *App) ExtractPDFMarkdown(pdfPath string) (PDFMarkdownPayload, error) {
 	return a.pdf.ExtractMarkdown(a.ctx, pdfPath)
-}
-
-func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
-	if a.workspaceWiki == nil {
-		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace wiki service is unavailable")
-	}
-	return a.workspaceWiki.StartScan(a.ctx, input)
-}
-
-func (a *App) QueryWorkspaceKnowledge(input WorkspaceKnowledgeQueryInput) (WorkspaceKnowledgeQueryResult, error) {
-	if a.workspaceKnowledge == nil {
-		return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace knowledge service is unavailable")
-	}
-	return a.workspaceKnowledge.Query(a.ctx, input)
-}
-
-func (a *App) PromoteWorkspaceKnowledge(input WorkspaceKnowledgePromotionInput) error {
-	if a.workspaceKnowledge == nil {
-		return fmt.Errorf("workspace knowledge service is unavailable")
-	}
-	return a.workspaceKnowledge.Promote(a.ctx, input)
-}
-
-func (a *App) ListWorkspaceKnowledgeEntities(workspaceID string) ([]WorkspaceKnowledgeEntity, error) {
-	if a.workspaceKnowledge == nil {
-		return nil, fmt.Errorf("workspace knowledge service is unavailable")
-	}
-	return a.workspaceKnowledge.ListEntities(a.ctx, workspaceID)
-}
-
-func (a *App) ListWorkspaceKnowledgeClaims(workspaceID string) ([]WorkspaceKnowledgeClaim, error) {
-	if a.workspaceKnowledge == nil {
-		return nil, fmt.Errorf("workspace knowledge service is unavailable")
-	}
-	return a.workspaceKnowledge.ListClaims(a.ctx, workspaceID)
-}
-
-func (a *App) ListWorkspaceKnowledgeTasks(workspaceID string) ([]WorkspaceKnowledgeTask, error) {
-	if a.workspaceKnowledge == nil {
-		return nil, fmt.Errorf("workspace knowledge service is unavailable")
-	}
-	return a.workspaceKnowledge.ListTasks(a.ctx, workspaceID)
 }
 
 func (a *App) StreamLLMChat(providerID, modelID int64, prompt string, contextData GatewayContextData) (string, error) {

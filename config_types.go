@@ -278,6 +278,105 @@ type OCRPageResult struct {
 	CreatedAt  string         `json:"createdAt"`
 }
 
+type WorkspaceWikiScanJobStatus string
+
+const (
+	WorkspaceWikiScanJobQueued    WorkspaceWikiScanJobStatus = "queued"
+	WorkspaceWikiScanJobRunning   WorkspaceWikiScanJobStatus = "running"
+	WorkspaceWikiScanJobCompleted WorkspaceWikiScanJobStatus = "completed"
+	WorkspaceWikiScanJobFailed    WorkspaceWikiScanJobStatus = "failed"
+	WorkspaceWikiScanJobCancelled WorkspaceWikiScanJobStatus = "cancelled"
+)
+
+type WorkspaceWikiPageKind string
+
+const (
+	WorkspaceWikiPageOverview WorkspaceWikiPageKind = "overview"
+	WorkspaceWikiPageDocument WorkspaceWikiPageKind = "document"
+)
+
+type WorkspaceWikiScanStartInput struct {
+	WorkspaceID string `json:"workspaceId"`
+	ProviderID  int64  `json:"providerId"`
+	ModelID     int64  `json:"modelId"`
+}
+
+type WorkspaceWikiScanJob struct {
+	JobID           string                     `json:"jobId"`
+	WorkspaceID     string                     `json:"workspaceId"`
+	Status          WorkspaceWikiScanJobStatus `json:"status"`
+	TotalItems      int                        `json:"totalItems"`
+	ProcessedItems  int                        `json:"processedItems"`
+	FailedItems     int                        `json:"failedItems"`
+	CurrentItem     string                     `json:"currentItem"`
+	CurrentStage    string                     `json:"currentStage"`
+	Message         string                     `json:"message"`
+	OverallProgress float64                    `json:"overallProgress"`
+	ProviderID      int64                      `json:"providerId"`
+	ModelID         int64                      `json:"modelId"`
+	Error           string                     `json:"error,omitempty"`
+	StartedAt       string                     `json:"startedAt"`
+	UpdatedAt       string                     `json:"updatedAt"`
+	FinishedAt      string                     `json:"finishedAt,omitempty"`
+}
+
+type WorkspaceWikiPage struct {
+	ID               string                `json:"id"`
+	WorkspaceID      string                `json:"workspaceId"`
+	SourceDocumentID string                `json:"sourceDocumentId"`
+	Title            string                `json:"title"`
+	Slug             string                `json:"slug"`
+	Kind             WorkspaceWikiPageKind `json:"kind"`
+	MarkdownPath     string                `json:"markdownPath"`
+	Summary          string                `json:"summary"`
+	CreatedAt        string                `json:"createdAt"`
+	UpdatedAt        string                `json:"updatedAt"`
+}
+
+type WorkspaceWikiPageContent struct {
+	Page     WorkspaceWikiPage `json:"page"`
+	Markdown string            `json:"markdown"`
+}
+
+type WorkspaceWikiJobEvent struct {
+	JobID   string               `json:"jobId"`
+	Type    string               `json:"type"`
+	Status  WorkspaceWikiScanJob `json:"status"`
+	Message string               `json:"message,omitempty"`
+	Error   string               `json:"error,omitempty"`
+}
+
+type WorkspaceWikiScanSource struct {
+	Key          string
+	Title        string
+	SourceType   string
+	DocumentID   string
+	AbsolutePath string
+	Kind         string
+}
+
+type workspaceWikiScanRunResult struct {
+	Processed int
+	Failed    int
+}
+
+type workspaceWikiScanJobUpdate struct {
+	Status          WorkspaceWikiScanJobStatus
+	ProcessedItems  int
+	FailedItems     int
+	CurrentItem     string
+	CurrentStage    string
+	Message         string
+	OverallProgress float64
+	Error           string
+	Finished        bool
+}
+
+type workspaceWikiPageRecord struct {
+	Page     WorkspaceWikiPage
+	Markdown string
+}
+
 type ChatHistoryEntry struct {
 	ID          int64  `json:"id"`
 	WorkspaceID string `json:"workspaceId"`

@@ -50,6 +50,15 @@ type openAIChatRequest struct {
 	Stream   bool             `json:"stream"`
 }
 
+type openAIChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		Text string `json:"text"`
+	} `json:"choices"`
+}
+
 type deepLXEndpointMode string
 
 const (
@@ -477,6 +486,88 @@ func gatewayEventName(requestID string) string {
 
 func emitGatewayEvent(ctx context.Context, eventName string, payload gatewayStreamEvent) {
 	wruntime.EventsEmit(ctx, eventName, payload)
+}
+
+func (g *gatewayService) GenerateWorkspaceWiki(ctx context.Context, providerID, modelID int64, prompt string) (string, error) {
+	provider, err := g.store.GetProviderSecret(ctx, providerID)
+	if err != nil {
+		return "", err
+	}
+	model, err := g.store.GetModel(ctx, modelID)
+	if err != nil {
+		return "", err
+	}
+	if model.ProviderID != provider.ID {
+		return "", fmt.Errorf("model %d does not belong to provider %d", modelID, providerID)
+	}
+	if provider.Type != ProviderTypeLLM {
+		return "", fmt.Errorf("provider %s is not an llm provider", provider.Name)
+	}
+	if !provider.IsActive {
+		return "", fmt.Errorf("provider %s is inactive", provider.Name)
+	}
+	if provider.APIKey == "" {
+		return "", fmt.Errorf("provider %s has no api key", provider.Name)
+	}
+
+	payload, err := json.Marshal(openAIChatRequest{
+		Model: model.ModelID,
+		Messages: []map[string]any{
+			{"role": "system", "content": "You are OpenSciReader, a precise academic workspace wiki writer. Return markdown only."},
+			{"role": "user", "content": strings.TrimSpace(prompt)},
+		},
+		Stream: false,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal workspace wiki request: %w", err)
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/")
+	if baseURL == "" {
+		return "", fmt.Errorf("provider base URL is empty")
+	}
+
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		applyProviderRequestHeaders(req, provider.APIKey)
+		return req, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("gateway http error: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return "", fmt.Errorf("read workspace wiki response: %w", err)
+	}
+
+	var parsed openAIChatResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("decode workspace wiki response: %w", err)
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("workspace wiki response has no choices")
+	}
+
+	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if content == "" {
+		content = strings.TrimSpace(parsed.Choices[0].Text)
+	}
+	if content == "" {
+		return "", fmt.Errorf("workspace wiki response is empty")
+	}
+	return content, nil
 }
 
 func (g *gatewayService) GenerateResearchFigure(ctx context.Context, _, _ int64, prompt string, contextData GatewayContextData, workspaceID string) (FigureGenerationResult, error) {
