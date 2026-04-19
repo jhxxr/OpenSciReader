@@ -43,7 +43,16 @@ func TestWorkspaceWikiScanRunnerWritesKnowledgeArtifacts(t *testing.T) {
 	job := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", 1, 2)
 	runner.run(context.Background(), job)
 
-	extractPath, err := fixture.files.ExtractPath("paper")
+	sources, err := fixture.files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources error: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources len = %d, want 1", len(sources))
+	}
+	source := sources[0]
+
+	extractPath, err := fixture.files.ExtractPath(source.Slug)
 	if err != nil {
 		t.Fatalf("ExtractPath error: %v", err)
 	}
@@ -55,14 +64,14 @@ func TestWorkspaceWikiScanRunnerWritesKnowledgeArtifacts(t *testing.T) {
 		t.Fatalf("extract markdown = %q, want source text", got)
 	}
 
-	bySourcePath, err := fixture.files.BySourcePath("paper")
+	bySourcePath, err := fixture.files.BySourcePath(source.Slug)
 	if err != nil {
 		t.Fatalf("BySourcePath error: %v", err)
 	}
 	if _, err := os.Stat(bySourcePath); err != nil {
 		t.Fatalf("stat by-source error: %v", err)
 	}
-	bySourcePayload, err := fixture.files.ReadBySource("paper")
+	bySourcePayload, err := fixture.files.ReadBySource(source.Slug)
 	if err != nil {
 		t.Fatalf("ReadBySource error: %v", err)
 	}
@@ -70,23 +79,16 @@ func TestWorkspaceWikiScanRunnerWritesKnowledgeArtifacts(t *testing.T) {
 		t.Fatalf("by-source payload = %#v, want one entity", bySourcePayload)
 	}
 
-	sources, err := fixture.files.ReadSources()
-	if err != nil {
-		t.Fatalf("ReadSources error: %v", err)
+	if source.Status != "ready" {
+		t.Fatalf("source status = %q, want ready", source.Status)
 	}
-	if len(sources) != 1 {
-		t.Fatalf("sources len = %d, want 1", len(sources))
+	if source.DocumentID != fixture.document.ID {
+		t.Fatalf("source document id = %q, want %q", source.DocumentID, fixture.document.ID)
 	}
-	if sources[0].Status != "ready" {
-		t.Fatalf("source status = %q, want ready", sources[0].Status)
+	if source.ExtractPath != extractPath {
+		t.Fatalf("source extract path = %q, want %q", source.ExtractPath, extractPath)
 	}
-	if sources[0].DocumentID != fixture.document.ID {
-		t.Fatalf("source document id = %q, want %q", sources[0].DocumentID, fixture.document.ID)
-	}
-	if sources[0].ExtractPath != extractPath {
-		t.Fatalf("source extract path = %q, want %q", sources[0].ExtractPath, extractPath)
-	}
-	if strings.TrimSpace(sources[0].ContentHash) == "" {
+	if strings.TrimSpace(source.ContentHash) == "" {
 		t.Fatal("source content hash should not be empty")
 	}
 
@@ -102,8 +104,8 @@ func TestWorkspaceWikiScanRunnerWritesKnowledgeArtifacts(t *testing.T) {
 	if runRecord.Status != string(WorkspaceWikiScanJobCompleted) {
 		t.Fatalf("scan run status = %q, want %q", runRecord.Status, WorkspaceWikiScanJobCompleted)
 	}
-	if len(runRecord.SourceIDs) != 1 || runRecord.SourceIDs[0] != "source:paper" {
-		t.Fatalf("scan run source ids = %#v, want source:paper", runRecord.SourceIDs)
+	if len(runRecord.SourceIDs) != 1 || runRecord.SourceIDs[0] != source.ID {
+		t.Fatalf("scan run source ids = %#v, want %q", runRecord.SourceIDs, source.ID)
 	}
 	if strings.TrimSpace(runRecord.Message) == "" {
 		t.Fatal("scan run message should not be empty")
@@ -119,6 +121,92 @@ func TestWorkspaceWikiScanRunnerWritesKnowledgeArtifacts(t *testing.T) {
 		t.Fatalf("EntitiesPath error: %v", err)
 	}
 	assertWorkspaceKnowledgeJSONCount(t, entitiesPath, 1)
+}
+
+func TestWorkspaceWikiScanRunnerKeepsStableDistinctSourceIdentityForDuplicateBasenamesAcrossRescans(t *testing.T) {
+	t.Parallel()
+
+	fixture := newWorkspaceKnowledgeScanFixture(t)
+	zetaPath := writeWorkspaceKnowledgeStandaloneSourceFile(t, fixture.files, filepath.Join("zeta", "shared.pdf"), "%PDF-1.4 zeta")
+
+	firstRunner := &workspaceWikiScanRunner{
+		paths: fixture.paths,
+		store: fixture.store,
+		pdf: &stubWorkspaceKnowledgeExtractor{
+			markdown: "# Shared\n\nStable source content.",
+		},
+		knowledgeLLM: &stubWorkspaceKnowledgeLLM{
+			bySource: WorkspaceKnowledgeBySourcePayload{
+				Entities: []WorkspaceKnowledgeEntity{{
+					ID:          "entity:method:stable-source",
+					WorkspaceID: fixture.workspace.ID,
+					Title:       "Stable Source",
+					Type:        "method",
+					Summary:     "Stable source summary",
+					Origin:      "scan",
+					Status:      "confirmed",
+					Confidence:  0.9,
+					CreatedAt:   nowRFC3339(),
+					UpdatedAt:   nowRFC3339(),
+				}},
+			},
+		},
+	}
+	firstJob := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", 1, 2)
+	firstRunner.run(context.Background(), firstJob)
+
+	firstSources, err := fixture.files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources first run error: %v", err)
+	}
+	zetaSourceBefore := findWorkspaceKnowledgeSourceByAbsolutePath(t, firstSources, zetaPath)
+
+	alphaPath := writeWorkspaceKnowledgeStandaloneSourceFile(t, fixture.files, filepath.Join("alpha", "shared.pdf"), "%PDF-1.4 alpha")
+	secondRunner := &workspaceWikiScanRunner{
+		paths: fixture.paths,
+		store: fixture.store,
+		pdf: &stubWorkspaceKnowledgeExtractor{
+			markdown: "# Shared\n\nStable source content.",
+		},
+		knowledgeLLM: &stubWorkspaceKnowledgeLLM{
+			bySource: WorkspaceKnowledgeBySourcePayload{
+				Entities: []WorkspaceKnowledgeEntity{{
+					ID:          "entity:method:stable-source",
+					WorkspaceID: fixture.workspace.ID,
+					Title:       "Stable Source",
+					Type:        "method",
+					Summary:     "Stable source summary",
+					Origin:      "scan",
+					Status:      "confirmed",
+					Confidence:  0.9,
+					CreatedAt:   nowRFC3339(),
+					UpdatedAt:   nowRFC3339(),
+				}},
+			},
+		},
+	}
+	secondJob := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", 1, 2)
+	secondRunner.run(context.Background(), secondJob)
+
+	secondSources, err := fixture.files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources second run error: %v", err)
+	}
+	zetaSourceAfter := findWorkspaceKnowledgeSourceByAbsolutePath(t, secondSources, zetaPath)
+	alphaSource := findWorkspaceKnowledgeSourceByAbsolutePath(t, secondSources, alphaPath)
+
+	if zetaSourceAfter.ID != zetaSourceBefore.ID {
+		t.Fatalf("zeta source id = %q, want stable %q", zetaSourceAfter.ID, zetaSourceBefore.ID)
+	}
+	if zetaSourceAfter.Slug != zetaSourceBefore.Slug {
+		t.Fatalf("zeta source slug = %q, want stable %q", zetaSourceAfter.Slug, zetaSourceBefore.Slug)
+	}
+	if alphaSource.ID == zetaSourceAfter.ID {
+		t.Fatalf("alpha source id = %q, want distinct from %q", alphaSource.ID, zetaSourceAfter.ID)
+	}
+	if alphaSource.Slug == zetaSourceAfter.Slug {
+		t.Fatalf("alpha source slug = %q, want distinct from %q", alphaSource.Slug, zetaSourceAfter.Slug)
+	}
 }
 
 func TestWorkspaceWikiScanRunnerPreservesPreviousBySourceOnTransientSourceFailure(t *testing.T) {
@@ -152,7 +240,15 @@ func TestWorkspaceWikiScanRunnerPreservesPreviousBySourceOnTransientSourceFailur
 	firstJob := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", 1, 2)
 	firstRunner.run(context.Background(), firstJob)
 
-	bySourcePath, err := fixture.files.BySourcePath("paper")
+	firstSources, err := fixture.files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources first run error: %v", err)
+	}
+	if len(firstSources) != 1 {
+		t.Fatalf("first run sources len = %d, want 1", len(firstSources))
+	}
+
+	bySourcePath, err := fixture.files.BySourcePath(firstSources[0].Slug)
 	if err != nil {
 		t.Fatalf("BySourcePath error: %v", err)
 	}
@@ -252,7 +348,7 @@ func TestWorkspaceWikiScanRunnerSkipsUnchangedSources(t *testing.T) {
 		t.Fatalf("first run sources len = %d, want 1", len(originalSources))
 	}
 
-	bySourcePath, err := fixture.files.BySourcePath("paper")
+	bySourcePath, err := fixture.files.BySourcePath(originalSources[0].Slug)
 	if err != nil {
 		t.Fatalf("BySourcePath error: %v", err)
 	}
@@ -434,6 +530,50 @@ func TestWorkspaceWikiScanRunnerTrimsLargeMarkdownBeforeDistillation(t *testing.
 	}
 }
 
+func TestWorkspaceWikiScanRunnerHonorsSmallContextPromptBudget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newWorkspaceKnowledgeScanFixture(t)
+	provider, model := saveWorkspaceKnowledgeLLMModelForTest(t, fixture.store, 256)
+
+	largeMarkdown := "# Paper A\n\n" + strings.Repeat("C", 12000)
+	llm := &stubWorkspaceKnowledgeLLM{
+		bySource: WorkspaceKnowledgeBySourcePayload{
+			Entities: []WorkspaceKnowledgeEntity{{
+				ID:          "entity:method:small-context",
+				WorkspaceID: fixture.workspace.ID,
+				Title:       "Small Context",
+				Type:        "method",
+				Summary:     "Small context summary",
+				Origin:      "scan",
+				Status:      "confirmed",
+				Confidence:  0.9,
+				CreatedAt:   nowRFC3339(),
+				UpdatedAt:   nowRFC3339(),
+			}},
+		},
+	}
+	runner := &workspaceWikiScanRunner{
+		paths: fixture.paths,
+		store: fixture.store,
+		pdf: &stubWorkspaceKnowledgeExtractor{
+			markdown: largeMarkdown,
+		},
+		knowledgeLLM: llm,
+	}
+
+	job := saveWorkspaceWikiScanJobForTest(t, fixture.store, fixture.workspace.ID, "", provider.ID, model.ID)
+	runner.run(context.Background(), job)
+
+	const wantMaxPromptChars = 256*5 - 128
+	if got := len(llm.lastBySourcePrompt); got > wantMaxPromptChars {
+		t.Fatalf("prompt len = %d, want <= %d", got, wantMaxPromptChars)
+	}
+	if !strings.Contains(llm.lastBySourcePrompt, "trimmed") {
+		t.Fatalf("prompt = %q, want trim marker", llm.lastBySourcePrompt)
+	}
+}
+
 type workspaceKnowledgeScanFixture struct {
 	paths     appPaths
 	store     *configStore
@@ -569,6 +709,36 @@ func saveWorkspaceKnowledgeLLMModelForTest(t *testing.T, store *configStore, con
 		t.Fatalf("SaveModel error: %v", err)
 	}
 	return provider, model
+}
+
+func writeWorkspaceKnowledgeStandaloneSourceFile(t *testing.T, files workspaceKnowledgeFiles, relativePath, content string) string {
+	t.Helper()
+
+	workspaceRoot, err := files.workspaceRootDir()
+	if err != nil {
+		t.Fatalf("workspaceRootDir error: %v", err)
+	}
+	absolutePath := filepath.Join(workspaceRoot, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll source dir error: %v", err)
+	}
+	if err := os.WriteFile(absolutePath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile source error: %v", err)
+	}
+	return absolutePath
+}
+
+func findWorkspaceKnowledgeSourceByAbsolutePath(t *testing.T, sources []WorkspaceKnowledgeSource, absolutePath string) WorkspaceKnowledgeSource {
+	t.Helper()
+
+	normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(absolutePath)
+	for _, source := range sources {
+		if normalizeWorkspaceKnowledgeAbsolutePath(source.AbsolutePath) == normalizedPath {
+			return source
+		}
+	}
+	t.Fatalf("source not found for absolute path %q in %#v", absolutePath, sources)
+	return WorkspaceKnowledgeSource{}
 }
 
 type stubWorkspaceKnowledgeExtractor struct {

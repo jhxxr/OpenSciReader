@@ -91,8 +91,8 @@ type workspaceKnowledgeScanCandidate struct {
 
 const (
 	defaultWorkspaceKnowledgePromptSourceChars = 12000
-	minWorkspaceKnowledgePromptSourceChars     = 8000
 	maxWorkspaceKnowledgePromptSourceChars     = 48000
+	workspaceKnowledgePromptSafetyChars        = 128
 )
 
 func (r *workspaceWikiScanRunner) run(ctx context.Context, job WorkspaceWikiScanJob) {
@@ -268,11 +268,14 @@ func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace 
 		return normalizeWorkspaceKnowledgeAbsolutePath(candidates[i].absolutePath) < normalizeWorkspaceKnowledgeAbsolutePath(candidates[j].absolutePath)
 	})
 
-	usedSlugs := map[string]int{}
 	sources := make([]WorkspaceKnowledgeSource, 0, len(candidates))
 	for _, candidate := range candidates {
 		baseSlug := workspaceKnowledgeSlug(strings.TrimSuffix(filepath.Base(candidate.absolutePath), filepath.Ext(candidate.absolutePath)))
-		slug := uniqueWorkspaceKnowledgeSlug(baseSlug, usedSlugs)
+		sourceKey, err := workspaceKnowledgeStableSourceKey(workspaceRoot, candidate)
+		if err != nil {
+			return nil, err
+		}
+		slug := workspaceKnowledgeStableSourceSlug(baseSlug, sourceKey)
 		extractPath, err := files.ExtractPath(slug)
 		if err != nil {
 			return nil, err
@@ -302,8 +305,7 @@ func (r *workspaceWikiScanRunner) processSource(ctx context.Context, workspace W
 		return err
 	}
 
-	promptSourceMarkdown := trimWorkspaceKnowledgePromptMarkdown(markdown, r.workspaceKnowledgePromptMarkdownLimit(ctx, job.ModelID))
-	prompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, *source, promptSourceMarkdown)
+	prompt := buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace, *source, markdown, r.workspaceKnowledgePromptCharBudget(ctx, job.ModelID))
 	payload, err := r.knowledgeLLM.GenerateWorkspaceKnowledgeBySource(ctx, job.ProviderID, job.ModelID, prompt)
 	if err != nil {
 		return fmt.Errorf("generate by-source knowledge for %s: %w", source.Title, err)
@@ -417,25 +419,25 @@ func (r *workspaceWikiScanRunner) shouldSkipSource(files workspaceKnowledgeFiles
 	return true, nil
 }
 
-func (r *workspaceWikiScanRunner) workspaceKnowledgePromptMarkdownLimit(ctx context.Context, modelID int64) int {
-	limit := defaultWorkspaceKnowledgePromptSourceChars
+func (r *workspaceWikiScanRunner) workspaceKnowledgePromptCharBudget(ctx context.Context, modelID int64) int {
+	budget := defaultWorkspaceKnowledgePromptSourceChars
 	if r.store == nil || modelID <= 0 {
-		return limit
+		return budget
 	}
 
 	model, err := r.store.GetModel(ctx, modelID)
 	if err != nil || model.ContextWindow <= 0 {
-		return limit
+		return budget
 	}
 
-	limit = (model.ContextWindow / 3) * 4
-	if limit < minWorkspaceKnowledgePromptSourceChars {
-		return minWorkspaceKnowledgePromptSourceChars
+	budget = model.ContextWindow*5 - workspaceKnowledgePromptSafetyChars
+	if budget < 0 {
+		budget = 0
 	}
-	if limit > maxWorkspaceKnowledgePromptSourceChars {
+	if budget > maxWorkspaceKnowledgePromptSourceChars {
 		return maxWorkspaceKnowledgePromptSourceChars
 	}
-	return limit
+	return budget
 }
 
 func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job WorkspaceWikiScanJob, runErr error) error {
@@ -589,16 +591,30 @@ func workspaceKnowledgeSourceKind(path string) string {
 	}
 }
 
-func uniqueWorkspaceKnowledgeSlug(base string, used map[string]int) string {
-	normalizedBase := strings.TrimSpace(base)
-	if normalizedBase == "" {
-		normalizedBase = "item"
+func workspaceKnowledgeStableSourceKey(workspaceRoot string, candidate workspaceKnowledgeScanCandidate) (string, error) {
+	if trimmedDocumentID := strings.TrimSpace(candidate.documentID); trimmedDocumentID != "" {
+		return "document:" + trimmedDocumentID, nil
 	}
-	used[normalizedBase]++
-	if used[normalizedBase] == 1 {
-		return normalizedBase
+	relativePath, err := filepath.Rel(workspaceRoot, candidate.absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace knowledge relative path for %s: %w", candidate.absolutePath, err)
 	}
-	return fmt.Sprintf("%s-%d", normalizedBase, used[normalizedBase])
+	return "path:" + normalizeWorkspaceKnowledgeRelativePath(relativePath), nil
+}
+
+func workspaceKnowledgeStableSourceSlug(baseSlug, sourceKey string) string {
+	normalizedBaseSlug := strings.TrimSpace(baseSlug)
+	if normalizedBaseSlug == "" {
+		normalizedBaseSlug = "item"
+	}
+	keyHash := sha256Hex([]byte(strings.TrimSpace(sourceKey)))
+	if len(keyHash) > 12 {
+		keyHash = keyHash[:12]
+	}
+	if keyHash == "" {
+		return normalizedBaseSlug
+	}
+	return normalizedBaseSlug + "-" + keyHash
 }
 
 func normalizeWorkspaceKnowledgeAbsolutePath(path string) string {
@@ -607,6 +623,42 @@ func normalizeWorkspaceKnowledgeAbsolutePath(path string) string {
 		return ""
 	}
 	return strings.ToLower(filepath.Clean(trimmed))
+}
+
+func normalizeWorkspaceKnowledgeRelativePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(trimmed)))
+}
+
+func buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace Workspace, source WorkspaceKnowledgeSource, markdown string, totalPromptBudget int) string {
+	if totalPromptBudget <= 0 {
+		return buildWorkspaceKnowledgeBySourcePrompt(workspace, source, "")
+	}
+
+	emptyPrompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, source, "")
+	if len(emptyPrompt) >= totalPromptBudget {
+		return emptyPrompt
+	}
+
+	maxSourceChars := totalPromptBudget - len(emptyPrompt)
+	bestPrompt := emptyPrompt
+	low := 0
+	high := maxSourceChars
+	for low <= high {
+		mid := (low + high) / 2
+		candidateMarkdown := trimWorkspaceKnowledgePromptMarkdown(markdown, mid)
+		candidatePrompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, source, candidateMarkdown)
+		if len(candidatePrompt) <= totalPromptBudget {
+			bestPrompt = candidatePrompt
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return bestPrompt
 }
 
 func trimWorkspaceKnowledgePromptMarkdown(markdown string, maxChars int) string {
