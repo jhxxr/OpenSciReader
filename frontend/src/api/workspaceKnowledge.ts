@@ -19,6 +19,10 @@ interface WailsWorkspaceKnowledgeApp {
     scopeDocumentId: string,
     scopeWorkspaceContext: boolean
   ) => Promise<WorkspaceKnowledgeQueryResult>;
+  PromoteWorkspaceKnowledgeCandidates: (
+    workspaceId: string,
+    candidates: WorkspaceKnowledgeCandidate[]
+  ) => Promise<void>;
 }
 
 export interface WorkspaceKnowledgeQueryResult {
@@ -113,5 +117,16 @@ export const workspaceKnowledgeApi = {
       scope.documentId ?? '',
       scope.workspaceContext ?? false
     );
+  },
+
+  async promoteCandidates(
+    workspaceId: string,
+    candidates: WorkspaceKnowledgeCandidate[]
+  ): Promise<void> {
+    const app = getApp();
+    if (!app || workspaceId.trim() === '' || candidates.length === 0) {
+      return;
+    }
+    return app.PromoteWorkspaceKnowledgeCandidates(workspaceId, candidates);
   },
 };
