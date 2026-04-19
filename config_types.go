@@ -98,36 +98,6 @@ type WorkspaceUpsertInput struct {
 	Color       string `json:"color"`
 }
 
-type WorkspaceWikiScanJobStatus string
-
-const (
-	WorkspaceWikiScanJobQueued    WorkspaceWikiScanJobStatus = "queued"
-	WorkspaceWikiScanJobRunning   WorkspaceWikiScanJobStatus = "running"
-	WorkspaceWikiScanJobCompleted WorkspaceWikiScanJobStatus = "completed"
-	WorkspaceWikiScanJobFailed    WorkspaceWikiScanJobStatus = "failed"
-)
-
-type WorkspaceWikiScanStartInput struct {
-	WorkspaceID string `json:"workspaceId"`
-	DocumentID  string `json:"documentId"`
-	ProviderID  int64  `json:"providerId"`
-	ModelID     int64  `json:"modelId"`
-}
-
-type WorkspaceWikiScanJob struct {
-	ID           int64                      `json:"id"`
-	WorkspaceID  string                     `json:"workspaceId"`
-	DocumentID   string                     `json:"documentId"`
-	Status       WorkspaceWikiScanJobStatus `json:"status"`
-	CurrentStage string                     `json:"currentStage"`
-	Message      string                     `json:"message"`
-	ProviderID   int64                      `json:"providerId"`
-	ModelID      int64                      `json:"modelId"`
-	StartedAt    string                     `json:"startedAt"`
-	FinishedAt   string                     `json:"finishedAt"`
-	UpdatedAt    string                     `json:"updatedAt"`
-}
-
 type DocumentRecord struct {
 	ID               string `json:"id"`
 	WorkspaceID      string `json:"workspaceId"`
@@ -297,6 +267,7 @@ const (
 
 type WorkspaceWikiScanStartInput struct {
 	WorkspaceID string `json:"workspaceId"`
+	DocumentID  string `json:"documentId"`
 	ProviderID  int64  `json:"providerId"`
 	ModelID     int64  `json:"modelId"`
 }
@@ -304,6 +275,7 @@ type WorkspaceWikiScanStartInput struct {
 type WorkspaceWikiScanJob struct {
 	JobID           string                     `json:"jobId"`
 	WorkspaceID     string                     `json:"workspaceId"`
+	DocumentID      string                     `json:"documentId"`
 	Status          WorkspaceWikiScanJobStatus `json:"status"`
 	TotalItems      int                        `json:"totalItems"`
 	ProcessedItems  int                        `json:"processedItems"`

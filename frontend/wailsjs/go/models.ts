@@ -780,6 +780,7 @@ export namespace main {
 	export class WorkspaceWikiScanJob {
 	    jobId: string;
 	    workspaceId: string;
+	    documentId: string;
 	    status: string;
 	    totalItems: number;
 	    processedItems: number;
@@ -803,6 +804,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.jobId = source["jobId"];
 	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
 	        this.status = source["status"];
 	        this.totalItems = source["totalItems"];
 	        this.processedItems = source["processedItems"];
@@ -821,6 +823,7 @@ export namespace main {
 	}
 	export class WorkspaceWikiScanStartInput {
 	    workspaceId: string;
+	    documentId: string;
 	    providerId: number;
 	    modelId: number;
 	
@@ -831,6 +834,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
 	        this.providerId = source["providerId"];
 	        this.modelId = source["modelId"];
 	    }

@@ -96,20 +96,6 @@ func (s *configStore) bootstrap() error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
-		`CREATE TABLE IF NOT EXISTS workspace_wiki_scan_jobs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			workspace_id TEXT NOT NULL,
-			document_id TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'queued',
-			current_stage TEXT NOT NULL DEFAULT '',
-			message TEXT NOT NULL DEFAULT '',
-			provider_id INTEGER NOT NULL DEFAULT 0,
-			model_id INTEGER NOT NULL DEFAULT 0,
-			started_at TEXT NOT NULL DEFAULT '',
-			finished_at TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
-		);`,
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
@@ -210,6 +196,7 @@ func (s *configStore) bootstrap() error {
 		`CREATE TABLE IF NOT EXISTS workspace_wiki_scan_jobs (
 			job_id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
+			document_id TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
 			total_items INTEGER NOT NULL DEFAULT 0,
 			processed_items INTEGER NOT NULL DEFAULT 0,
@@ -256,6 +243,9 @@ func (s *configStore) bootstrap() error {
 		return err
 	}
 	if err := s.purgeDeprecatedOCRProviders(); err != nil {
+		return err
+	}
+	if err := s.ensureWorkspaceWikiScanJobsSchema(); err != nil {
 		return err
 	}
 
@@ -890,61 +880,6 @@ func (s *configStore) GetWorkspace(ctx context.Context, workspaceID string) (Wor
 	return workspace, nil
 }
 
-func (s *configStore) SaveWorkspaceWikiScanJob(ctx context.Context, job WorkspaceWikiScanJob) (WorkspaceWikiScanJob, error) {
-	workspaceID := strings.TrimSpace(job.WorkspaceID)
-	if workspaceID == "" {
-		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace id is required")
-	}
-	if _, err := s.GetWorkspace(ctx, workspaceID); err != nil {
-		return WorkspaceWikiScanJob{}, err
-	}
-
-	record := WorkspaceWikiScanJob{
-		ID:           job.ID,
-		WorkspaceID:  workspaceID,
-		DocumentID:   strings.TrimSpace(job.DocumentID),
-		Status:       job.Status,
-		CurrentStage: strings.TrimSpace(job.CurrentStage),
-		Message:      strings.TrimSpace(job.Message),
-		ProviderID:   job.ProviderID,
-		ModelID:      job.ModelID,
-		StartedAt:    strings.TrimSpace(job.StartedAt),
-		FinishedAt:   strings.TrimSpace(job.FinishedAt),
-		UpdatedAt:    firstNonEmptyText(strings.TrimSpace(job.UpdatedAt), nowRFC3339()),
-	}
-	if record.Status == "" {
-		record.Status = WorkspaceWikiScanJobQueued
-	}
-
-	if record.ID == 0 {
-		result, err := s.appDB.ExecContext(ctx, `
-			INSERT INTO workspace_wiki_scan_jobs (
-				workspace_id, document_id, status, current_stage, message,
-				provider_id, model_id, started_at, finished_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-		`, record.WorkspaceID, record.DocumentID, string(record.Status), record.CurrentStage, record.Message, record.ProviderID, record.ModelID, record.StartedAt, record.FinishedAt, record.UpdatedAt)
-		if err != nil {
-			return WorkspaceWikiScanJob{}, fmt.Errorf("save workspace wiki scan job: %w", err)
-		}
-		id, err := result.LastInsertId()
-		if err != nil {
-			return WorkspaceWikiScanJob{}, fmt.Errorf("read workspace wiki scan job id: %w", err)
-		}
-		record.ID = id
-		return record, nil
-	}
-
-	if _, err := s.appDB.ExecContext(ctx, `
-		UPDATE workspace_wiki_scan_jobs
-		SET workspace_id = ?, document_id = ?, status = ?, current_stage = ?, message = ?,
-			provider_id = ?, model_id = ?, started_at = ?, finished_at = ?, updated_at = ?
-		WHERE id = ?;
-	`, record.WorkspaceID, record.DocumentID, string(record.Status), record.CurrentStage, record.Message, record.ProviderID, record.ModelID, record.StartedAt, record.FinishedAt, record.UpdatedAt, record.ID); err != nil {
-		return WorkspaceWikiScanJob{}, fmt.Errorf("update workspace wiki scan job %d: %w", record.ID, err)
-	}
-	return record, nil
-}
-
 func (s *configStore) ListDocumentsByWorkspace(ctx context.Context, workspaceID string) ([]DocumentRecord, error) {
 	rows, err := s.appDB.QueryContext(ctx, `
 		SELECT id, workspace_id, title, document_type, source_type, default_asset_id, original_file_name, primary_pdf_path, content_hash, created_at, updated_at
@@ -1387,14 +1322,16 @@ func (s *configStore) SaveWorkspaceWikiScanJob(ctx context.Context, job Workspac
 	if strings.TrimSpace(job.JobID) == "" {
 		job.JobID = newEntityID("wiki_job")
 	}
+	job.DocumentID = strings.TrimSpace(job.DocumentID)
 	if strings.TrimSpace(job.StartedAt) == "" {
 		job.StartedAt = nowRFC3339()
 	}
 	job.UpdatedAt = firstNonEmpty(strings.TrimSpace(job.UpdatedAt), job.StartedAt)
 	if _, err := s.appDB.ExecContext(ctx, `
-		INSERT INTO workspace_wiki_scan_jobs (job_id, workspace_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO workspace_wiki_scan_jobs (job_id, workspace_id, document_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
+			document_id = excluded.document_id,
 			status = excluded.status,
 			total_items = excluded.total_items,
 			processed_items = excluded.processed_items,
@@ -1409,7 +1346,7 @@ func (s *configStore) SaveWorkspaceWikiScanJob(ctx context.Context, job Workspac
 			started_at = excluded.started_at,
 			updated_at = excluded.updated_at,
 			finished_at = excluded.finished_at;
-	`, job.JobID, job.WorkspaceID, job.Status, job.TotalItems, job.ProcessedItems, job.FailedItems, job.CurrentItem, job.CurrentStage, job.Message, job.OverallProgress, job.ProviderID, job.ModelID, job.Error, job.StartedAt, job.UpdatedAt, job.FinishedAt); err != nil {
+	`, job.JobID, job.WorkspaceID, job.DocumentID, job.Status, job.TotalItems, job.ProcessedItems, job.FailedItems, job.CurrentItem, job.CurrentStage, job.Message, job.OverallProgress, job.ProviderID, job.ModelID, job.Error, job.StartedAt, job.UpdatedAt, job.FinishedAt); err != nil {
 		return WorkspaceWikiScanJob{}, fmt.Errorf("save workspace wiki scan job: %w", err)
 	}
 	return job, nil
@@ -1440,11 +1377,11 @@ func (s *configStore) UpdateWorkspaceWikiScanJob(ctx context.Context, jobID stri
 func (s *configStore) GetWorkspaceWikiScanJob(ctx context.Context, jobID string) (WorkspaceWikiScanJob, error) {
 	var job WorkspaceWikiScanJob
 	if err := s.appDB.QueryRowContext(ctx, `
-		SELECT job_id, workspace_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at
+		SELECT job_id, workspace_id, document_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at
 		FROM workspace_wiki_scan_jobs
 		WHERE job_id = ?
 		LIMIT 1;
-	`, strings.TrimSpace(jobID)).Scan(&job.JobID, &job.WorkspaceID, &job.Status, &job.TotalItems, &job.ProcessedItems, &job.FailedItems, &job.CurrentItem, &job.CurrentStage, &job.Message, &job.OverallProgress, &job.ProviderID, &job.ModelID, &job.Error, &job.StartedAt, &job.UpdatedAt, &job.FinishedAt); err != nil {
+	`, strings.TrimSpace(jobID)).Scan(&job.JobID, &job.WorkspaceID, &job.DocumentID, &job.Status, &job.TotalItems, &job.ProcessedItems, &job.FailedItems, &job.CurrentItem, &job.CurrentStage, &job.Message, &job.OverallProgress, &job.ProviderID, &job.ModelID, &job.Error, &job.StartedAt, &job.UpdatedAt, &job.FinishedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkspaceWikiScanJob{}, fmt.Errorf("wiki scan job %s not found", strings.TrimSpace(jobID))
 		}
@@ -1455,7 +1392,7 @@ func (s *configStore) GetWorkspaceWikiScanJob(ctx context.Context, jobID string)
 
 func (s *configStore) ListWorkspaceWikiScanJobs(ctx context.Context) ([]WorkspaceWikiScanJob, error) {
 	rows, err := s.appDB.QueryContext(ctx, `
-		SELECT job_id, workspace_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at
+		SELECT job_id, workspace_id, document_id, status, total_items, processed_items, failed_items, current_item, current_stage, message, overall_progress, provider_id, model_id, error, started_at, updated_at, finished_at
 		FROM workspace_wiki_scan_jobs
 		ORDER BY updated_at DESC, started_at DESC, job_id DESC;
 	`)
@@ -1467,7 +1404,7 @@ func (s *configStore) ListWorkspaceWikiScanJobs(ctx context.Context) ([]Workspac
 	jobs := []WorkspaceWikiScanJob{}
 	for rows.Next() {
 		var job WorkspaceWikiScanJob
-		if err := rows.Scan(&job.JobID, &job.WorkspaceID, &job.Status, &job.TotalItems, &job.ProcessedItems, &job.FailedItems, &job.CurrentItem, &job.CurrentStage, &job.Message, &job.OverallProgress, &job.ProviderID, &job.ModelID, &job.Error, &job.StartedAt, &job.UpdatedAt, &job.FinishedAt); err != nil {
+		if err := rows.Scan(&job.JobID, &job.WorkspaceID, &job.DocumentID, &job.Status, &job.TotalItems, &job.ProcessedItems, &job.FailedItems, &job.CurrentItem, &job.CurrentStage, &job.Message, &job.OverallProgress, &job.ProviderID, &job.ModelID, &job.Error, &job.StartedAt, &job.UpdatedAt, &job.FinishedAt); err != nil {
 			return nil, fmt.Errorf("scan workspace wiki scan job: %w", err)
 		}
 		jobs = append(jobs, job)
@@ -1961,6 +1898,119 @@ func (s *configStore) ensureHistoryDocumentColumns() error {
 				return fmt.Errorf("add %s.document_id column: %w", tableName, err)
 			}
 		}
+	}
+	return nil
+}
+
+func (s *configStore) ensureWorkspaceWikiScanJobsSchema() error {
+	rows, err := s.appDB.Query(`PRAGMA table_info(workspace_wiki_scan_jobs);`)
+	if err != nil {
+		return fmt.Errorf("inspect workspace wiki scan jobs schema: %w", err)
+	}
+	defer rows.Close()
+
+	type columnInfo struct {
+		name string
+	}
+
+	columns := map[string]columnInfo{}
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			colType    string
+			notNull    int
+			defaultV   sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primaryKey); err != nil {
+			return fmt.Errorf("scan workspace wiki scan jobs schema: %w", err)
+		}
+		columns[strings.ToLower(strings.TrimSpace(name))] = columnInfo{name: name}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate workspace wiki scan jobs schema: %w", err)
+	}
+
+	if _, ok := columns["job_id"]; ok {
+		if _, ok := columns["document_id"]; !ok {
+			if _, err := s.appDB.Exec(`ALTER TABLE workspace_wiki_scan_jobs ADD COLUMN document_id TEXT NOT NULL DEFAULT '';`); err != nil {
+				return fmt.Errorf("add workspace wiki scan jobs document_id column: %w", err)
+			}
+		}
+		return nil
+	}
+
+	tx, err := s.appDB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin workspace wiki scan jobs migration: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`ALTER TABLE workspace_wiki_scan_jobs RENAME TO workspace_wiki_scan_jobs_legacy;`); err != nil {
+		return fmt.Errorf("rename legacy workspace wiki scan jobs table: %w", err)
+	}
+	if _, err = tx.Exec(`
+		CREATE TABLE workspace_wiki_scan_jobs (
+			job_id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			document_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			total_items INTEGER NOT NULL DEFAULT 0,
+			processed_items INTEGER NOT NULL DEFAULT 0,
+			failed_items INTEGER NOT NULL DEFAULT 0,
+			current_item TEXT NOT NULL DEFAULT '',
+			current_stage TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			overall_progress REAL NOT NULL DEFAULT 0,
+			provider_id INTEGER NOT NULL DEFAULT 0,
+			model_id INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			started_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			finished_at TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		return fmt.Errorf("create workspace wiki scan jobs table: %w", err)
+	}
+	if _, err = tx.Exec(`
+		INSERT INTO workspace_wiki_scan_jobs (
+			job_id, workspace_id, document_id, status, total_items, processed_items, failed_items,
+			current_item, current_stage, message, overall_progress, provider_id, model_id, error,
+			started_at, updated_at, finished_at
+		)
+		SELECT
+			printf('wiki_job_legacy_%d', id),
+			workspace_id,
+			COALESCE(document_id, ''),
+			status,
+			0,
+			CASE WHEN status IN ('completed', 'failed') THEN 1 ELSE 0 END,
+			CASE WHEN status = 'failed' THEN 1 ELSE 0 END,
+			'',
+			current_stage,
+			message,
+			CASE WHEN status IN ('completed', 'failed') THEN 1 ELSE 0 END,
+			provider_id,
+			model_id,
+			CASE WHEN status = 'failed' THEN message ELSE '' END,
+			started_at,
+			updated_at,
+			finished_at
+		FROM workspace_wiki_scan_jobs_legacy;
+	`); err != nil {
+		return fmt.Errorf("migrate workspace wiki scan jobs: %w", err)
+	}
+	if _, err = tx.Exec(`DROP TABLE workspace_wiki_scan_jobs_legacy;`); err != nil {
+		return fmt.Errorf("drop legacy workspace wiki scan jobs table: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit workspace wiki scan jobs migration: %w", err)
 	}
 	return nil
 }

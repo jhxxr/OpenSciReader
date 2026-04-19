@@ -19,7 +19,7 @@ type App struct {
 	gateway    *gatewayService
 	pdf        *pdfService
 	translator *translator.Manager
-	wiki       *workspaceWikiScanRunner
+	wiki       *workspaceWikiService
 }
 
 // NewApp creates a new App application struct
@@ -48,7 +48,7 @@ func (a *App) startup(ctx context.Context) {
 	a.gateway = newGatewayService(store)
 	a.pdf = newPDFService(store)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
-	a.wiki = newWorkspaceWikiScanRunner(a)
+	a.wiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -177,6 +177,9 @@ func (a *App) DeleteDocument(workspaceID, documentID string) error {
 }
 
 func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
+	if a.wiki == nil {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace wiki service is unavailable")
+	}
 	return a.wiki.Start(a.ctx, input)
 }
 
@@ -189,6 +192,9 @@ func (a *App) ListWorkspaceWikiScanJobs() ([]WorkspaceWikiScanJob, error) {
 }
 
 func (a *App) CancelWorkspaceWikiScan(jobID string) (WorkspaceWikiScanJob, error) {
+	if a.wiki == nil {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace wiki service is unavailable")
+	}
 	return a.wiki.Cancel(a.ctx, jobID)
 }
 

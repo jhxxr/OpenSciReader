@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type workspaceKnowledgeExtractor interface {
@@ -24,6 +26,8 @@ type workspaceWikiService struct {
 	store        *configStore
 	pdf          workspaceKnowledgeExtractor
 	knowledgeLLM workspaceKnowledgeLLM
+	mu           sync.Mutex
+	runningJobs  map[string]context.CancelFunc
 }
 
 func newWorkspaceWikiService(paths appPaths, store *configStore, pdf workspaceKnowledgeExtractor, knowledgeLLM workspaceKnowledgeLLM) *workspaceWikiService {
@@ -32,7 +36,16 @@ func newWorkspaceWikiService(paths appPaths, store *configStore, pdf workspaceKn
 		store:        store,
 		pdf:          pdf,
 		knowledgeLLM: knowledgeLLM,
+		runningJobs:  map[string]context.CancelFunc{},
 	}
+}
+
+func (s *workspaceWikiService) Start(ctx context.Context, input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
+	return s.StartScan(ctx, input)
+}
+
+func (s *workspaceWikiService) Cancel(ctx context.Context, jobID string) (WorkspaceWikiScanJob, error) {
+	return s.CancelScan(ctx, jobID)
 }
 
 func (s *workspaceWikiService) StartScan(ctx context.Context, input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
@@ -53,8 +66,10 @@ func (s *workspaceWikiService) StartScan(ctx context.Context, input WorkspaceWik
 		WorkspaceID:  workspaceID,
 		DocumentID:   strings.TrimSpace(input.DocumentID),
 		Status:       WorkspaceWikiScanJobQueued,
+		CurrentItem:  "",
 		CurrentStage: "queued",
 		Message:      "queued",
+		Error:        "",
 		ProviderID:   input.ProviderID,
 		ModelID:      input.ModelID,
 		StartedAt:    nowRFC3339(),
@@ -70,8 +85,66 @@ func (s *workspaceWikiService) StartScan(ctx context.Context, input WorkspaceWik
 		pdf:          s.pdf,
 		knowledgeLLM: s.knowledgeLLM,
 	}
-	go runner.run(context.Background(), job)
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.trackJob(job.JobID, cancel)
+	go func() {
+		defer s.untrackJob(job.JobID)
+		runner.run(runCtx, job)
+	}()
 	return job, nil
+}
+
+func (s *workspaceWikiService) CancelScan(ctx context.Context, jobID string) (WorkspaceWikiScanJob, error) {
+	trimmedJobID := strings.TrimSpace(jobID)
+	if trimmedJobID == "" {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("job id is required")
+	}
+	if s.store == nil {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("config store is unavailable")
+	}
+
+	job, err := s.store.GetWorkspaceWikiScanJob(ctx, trimmedJobID)
+	if err != nil {
+		return WorkspaceWikiScanJob{}, err
+	}
+	if job.Status == WorkspaceWikiScanJobCompleted || job.Status == WorkspaceWikiScanJobFailed || job.Status == WorkspaceWikiScanJobCancelled {
+		return job, nil
+	}
+
+	s.cancelTrackedJob(trimmedJobID)
+	return s.store.UpdateWorkspaceWikiScanJob(ctx, trimmedJobID, workspaceWikiScanJobUpdate{
+		Status:          WorkspaceWikiScanJobCancelled,
+		CurrentItem:     "",
+		CurrentStage:    "cancelled",
+		Message:         "scan cancelled",
+		OverallProgress: job.OverallProgress,
+		Error:           "",
+		Finished:        true,
+	})
+}
+
+func (s *workspaceWikiService) trackJob(jobID string, cancel context.CancelFunc) {
+	if strings.TrimSpace(jobID) == "" || cancel == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runningJobs[jobID] = cancel
+}
+
+func (s *workspaceWikiService) untrackJob(jobID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.runningJobs, strings.TrimSpace(jobID))
+}
+
+func (s *workspaceWikiService) cancelTrackedJob(jobID string) {
+	s.mu.Lock()
+	cancel := s.runningJobs[strings.TrimSpace(jobID)]
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 type workspaceWikiScanRunner struct {
@@ -101,6 +174,11 @@ func (r *workspaceWikiScanRunner) run(ctx context.Context, job WorkspaceWikiScan
 	}
 	job = r.saveJob(ctx, job, WorkspaceWikiScanJobRunning, "scan", "scanning workspace", false)
 	if err := r.runScan(ctx, job); err != nil {
+		if errors.Is(err, context.Canceled) {
+			_ = r.writeScanRunCancelled(job)
+			_ = r.saveJob(ctx, job, WorkspaceWikiScanJobCancelled, "cancelled", "scan cancelled", true)
+			return
+		}
 		_ = r.writeScanRunFailure(ctx, job, err)
 		_ = r.saveJob(ctx, job, WorkspaceWikiScanJobFailed, "failed", err.Error(), true)
 		return
@@ -133,6 +211,12 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err != nil {
 		return err
 	}
+	job.TotalItems = len(sources)
+	job.ProcessedItems = 0
+	job.FailedItems = 0
+	job.OverallProgress = 0
+	job.CurrentItem = ""
+	job = r.persistJob(ctx, job)
 	if strings.TrimSpace(job.DocumentID) != "" && len(sources) == 0 {
 		return fmt.Errorf("no scan sources found for document %s", strings.TrimSpace(job.DocumentID))
 	}
@@ -154,7 +238,14 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	skippedCount := 0
 	sourceIDs := make([]string, 0, len(sources))
 	for index := range sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		sourceIDs = append(sourceIDs, sources[index].ID)
+		job.CurrentItem = sources[index].Title
+		job.CurrentStage = "scan"
+		job.Message = fmt.Sprintf("scanning %s", sources[index].Title)
+		job = r.persistJob(ctx, job)
 		existingSource, hasExistingSource := existingByID[sources[index].ID]
 		if hasExistingSource {
 			skip, err := r.shouldSkipSource(files, sources[index], existingSource)
@@ -164,6 +255,10 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 			if skip {
 				skippedCount++
 				sources[index] = mergeSkippedWorkspaceKnowledgeSource(existingSource, sources[index])
+				job.ProcessedItems++
+				job.OverallProgress = workspaceWikiScanProgress(job.ProcessedItems, job.TotalItems)
+				job.Message = fmt.Sprintf("skipped %s", sources[index].Title)
+				job = r.persistJob(ctx, job)
 				continue
 			}
 		}
@@ -172,7 +267,15 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 			sources[index].Status = "error"
 			sources[index].LastError = err.Error()
 			sources[index].LastScanAt = nowRFC3339()
+			job.FailedItems = failureCount
+			job.Error = err.Error()
+			job.Message = err.Error()
+		} else {
+			job.Error = ""
 		}
+		job.ProcessedItems++
+		job.OverallProgress = workspaceWikiScanProgress(job.ProcessedItems, job.TotalItems)
+		job = r.persistJob(ctx, job)
 	}
 
 	manifest = mergeWorkspaceKnowledgeSources(manifest, sources, fullScan)
@@ -180,12 +283,15 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err := CompileWorkspaceKnowledge(files, workspace.Name); err != nil {
 		return err
 	}
 
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
-		ID:          fmt.Sprintf("%d", job.ID),
+		ID:          strings.TrimSpace(job.JobID),
 		WorkspaceID: workspace.ID,
 		Status:      string(WorkspaceWikiScanJobCompleted),
 		StartedAt:   firstNonEmptyText(strings.TrimSpace(job.StartedAt), nowRFC3339()),
@@ -391,6 +497,23 @@ func (r *workspaceWikiScanRunner) saveJob(ctx context.Context, job WorkspaceWiki
 	if finished {
 		job.FinishedAt = job.UpdatedAt
 	}
+	if status == WorkspaceWikiScanJobFailed {
+		job.Error = strings.TrimSpace(message)
+	} else {
+		job.Error = ""
+	}
+	saved, err := r.store.SaveWorkspaceWikiScanJob(ctx, job)
+	if err != nil {
+		return job
+	}
+	return saved
+}
+
+func (r *workspaceWikiScanRunner) persistJob(ctx context.Context, job WorkspaceWikiScanJob) WorkspaceWikiScanJob {
+	if r.store == nil {
+		return job
+	}
+	job.UpdatedAt = nowRFC3339()
 	saved, err := r.store.SaveWorkspaceWikiScanJob(ctx, job)
 	if err != nil {
 		return job
@@ -453,13 +576,45 @@ func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job W
 		return err
 	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
-		ID:          fmt.Sprintf("%d", job.ID),
+		ID:          strings.TrimSpace(job.JobID),
 		WorkspaceID: workspaceID,
 		Status:      string(WorkspaceWikiScanJobFailed),
 		StartedAt:   firstNonEmptyText(strings.TrimSpace(job.StartedAt), nowRFC3339()),
 		FinishedAt:  nowRFC3339(),
 		Message:     strings.TrimSpace(runErr.Error()),
 	})
+}
+
+func (r *workspaceWikiScanRunner) writeScanRunCancelled(job WorkspaceWikiScanJob) error {
+	workspaceID := strings.TrimSpace(job.WorkspaceID)
+	if workspaceID == "" {
+		return nil
+	}
+	files := newWorkspaceKnowledgeFiles(r.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
+		ID:          strings.TrimSpace(job.JobID),
+		WorkspaceID: workspaceID,
+		Status:      string(WorkspaceWikiScanJobCancelled),
+		StartedAt:   firstNonEmptyText(strings.TrimSpace(job.StartedAt), nowRFC3339()),
+		FinishedAt:  nowRFC3339(),
+		Message:     "scan cancelled",
+	})
+}
+
+func workspaceWikiScanProgress(processedItems, totalItems int) float64 {
+	if totalItems <= 0 {
+		return 0
+	}
+	if processedItems >= totalItems {
+		return 1
+	}
+	if processedItems <= 0 {
+		return 0
+	}
+	return float64(processedItems) / float64(totalItems)
 }
 
 func mergeWorkspaceKnowledgeSources(existing, updated []WorkspaceKnowledgeSource, fullScan bool) []WorkspaceKnowledgeSource {

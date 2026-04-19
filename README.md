@@ -23,15 +23,45 @@ This branch includes a local PDF layout-translation pipeline built around Go job
 
 ### 🎯 阅读与翻译 (Reading & Translation)
 - **🧠 本地排版级翻译 (Local PDF Layout Translation):** View translations while preserving the original layout.
-- **📖 双栏阅读模式 (Dual-column reading mode):** 
+- **📖 双栏阅读模式 (Dual-column reading mode):**
   - Left column: Original PDF
   - Right column: Translated pages replaced chunk by chunk.
 - **⚡ 分块加载预览 (Chunk-based Translation Preview):** Preview translations in 25-page chunks for optimized performance.
 - **📚 图书级导出 (Whole-book Export):** Reruns translation and outputs mono + dual-language PDFs.
-- **⚙️ 任务管理与实时通讯 (Real-time Job Management):** 
+- **⚙️ 任务管理与实时通讯 (Real-time Job Management):**
   - Full support for canceling and retrying jobs (`retryJobId`).
   - WebSocket event streaming for real-time progress updates.
   - Persisted job metadata and output file paths under the user config directory.
+
+### 🔌 AI 提供商与模型 (AI Providers & Models)
+支持多种 AI 服务提供商的统一接入:
+
+**LLM 提供商:**
+- OpenAI 兼容 API (OpenAI, Anysysys, Ollama, LM Studio, etc.)
+- DeepL API / DeepLX (pro / official / free)
+- Google Translate API
+- Microsoft Azure Translator
+- 自定义 LLM (通过 OpenAI 兼容接口)
+
+**特殊能力提供商:**
+- **Drawing Provider:** 生成科研图表 (当前支持 Google Gemini)
+- **OCR Provider:** 端到端 OCR (当前支持 GLM-4V)
+
+每个提供商支持配置:
+- Base URL (API 端点)
+- API Key / Auth Token
+- Region (可选, 如 Azure)
+- 模型列表自动发现
+
+### 📝 PDF 内容提取 (PDF Content Extraction)
+- **Markdown 提取:** 使用 markitdown 将 PDF 转为 Markdown (带缓存)
+- **OCR 识别:** 支持对扫描版 PDF 进行 OCR, 提取文本块和布局信息
+
+### 🗂️ Zotero 集成 (Zotero Integration)
+- 连接本地 Zotero (通过 zotero-local API)
+- 同步文献库收藏夹
+- 直接从 Zotero 打开 PDF 文献
+- 自动拉取 PDF 元数据 (Title, CiteKey, Creator Summary)
 
 ### 🧠 工作区知识层 (Workspace Knowledge Layer)
 - **📁 文件级知识目录 (File-based Knowledge Directory):**
@@ -42,6 +72,7 @@ This branch includes a local PDF layout-translation pipeline built around Go job
 - **🧩 结构化记忆蒸馏 (Structured Memory Distillation):** Per-source extraction of entities, claims, tasks, and relations
 - **📝 编译聚合 (Compile & Aggregate):** Merge per-source memory into workspace-level knowledge with deduplication
 - **📖 Wiki 生成 (Wiki Generation):** Auto-generated overview, docs, concepts, and open-questions pages
+- **❓ 知识问答 (Knowledge Query):** 基于工作区知识的多跳推理问答
 
 ### 💬 智能侧边栏 (AI Copilot Sidebar)
 - **❓ Ask (知识问答):** Multi-scope question input (selection / page / document / workspace context)
