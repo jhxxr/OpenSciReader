@@ -247,6 +247,102 @@ func (g *gatewayService) streamOpenAICompatible(appCtx context.Context, eventNam
 	emitGatewayEvent(appCtx, eventName, gatewayStreamEvent{RequestID: requestID, Type: "done"})
 }
 
+func (g *gatewayService) GenerateWorkspaceKnowledgeBySource(ctx context.Context, providerID, modelID int64, prompt string) (WorkspaceKnowledgeBySourcePayload, error) {
+	text, err := g.generateOpenAICompatibleText(ctx, providerID, modelID, []map[string]any{
+		{
+			"role":    "system",
+			"content": "Return only valid JSON for the requested workspace knowledge payload.",
+		},
+		{
+			"role":    "user",
+			"content": strings.TrimSpace(prompt),
+		},
+	})
+	if err != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, err
+	}
+
+	text = stripMarkdownCodeFence(text)
+	var payload WorkspaceKnowledgeBySourcePayload
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, fmt.Errorf("decode workspace knowledge by-source payload: %w", err)
+	}
+	return payload, nil
+}
+
+func (g *gatewayService) GenerateWorkspaceKnowledgeMarkdown(ctx context.Context, providerID, modelID int64, prompt string) (string, error) {
+	return g.generateOpenAICompatibleText(ctx, providerID, modelID, []map[string]any{
+		{
+			"role":    "system",
+			"content": "Return only markdown.",
+		},
+		{
+			"role":    "user",
+			"content": strings.TrimSpace(prompt),
+		},
+	})
+}
+
+func (g *gatewayService) generateOpenAICompatibleText(ctx context.Context, providerID, modelID int64, messages []map[string]any) (string, error) {
+	provider, model, err := g.loadOpenAICompatibleProviderModel(ctx, providerID, modelID)
+	if err != nil {
+		return "", err
+	}
+
+	payload, err := json.Marshal(openAIChatRequest{
+		Model:    model.ModelID,
+		Messages: messages,
+		Stream:   false,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := g.doRequestWith429Retry(ctx, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		applyProviderRequestHeaders(req, provider.APIKey)
+		return req, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("gateway http error: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return parseOpenAICompatibleResponseText(body)
+}
+
+func (g *gatewayService) loadOpenAICompatibleProviderModel(ctx context.Context, providerID, modelID int64) (providerSecretRecord, ModelRecord, error) {
+	provider, err := g.store.GetProviderSecret(ctx, providerID)
+	if err != nil {
+		return providerSecretRecord{}, ModelRecord{}, err
+	}
+	model, err := g.store.GetModel(ctx, modelID)
+	if err != nil {
+		return providerSecretRecord{}, ModelRecord{}, err
+	}
+	if model.ProviderID != provider.ID {
+		return providerSecretRecord{}, ModelRecord{}, fmt.Errorf("model %d does not belong to provider %d", modelID, providerID)
+	}
+	if !provider.IsActive {
+		return providerSecretRecord{}, ModelRecord{}, fmt.Errorf("provider %s is inactive", provider.Name)
+	}
+	if provider.APIKey == "" {
+		return providerSecretRecord{}, ModelRecord{}, fmt.Errorf("provider %s has no api key", provider.Name)
+	}
+	return provider, model, nil
+}
+
 func buildChatMessages(prompt string, contextData GatewayContextData) []map[string]any {
 	parts := make([]string, 0, 5)
 	if contextData.ItemTitle != "" {
@@ -309,6 +405,44 @@ func extractStreamChunk(data string) string {
 		return parsed.Choices[0].Message.Content
 	}
 	return parsed.Choices[0].Text
+}
+
+func parseOpenAICompatibleResponseText(body []byte) (string, error) {
+	type response struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Text string `json:"text"`
+		} `json:"choices"`
+	}
+
+	var parsed response
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("empty response")
+	}
+
+	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if content != "" {
+		return content, nil
+	}
+
+	content = strings.TrimSpace(parsed.Choices[0].Text)
+	if content != "" {
+		return content, nil
+	}
+	return "", fmt.Errorf("empty response")
+}
+
+func stripMarkdownCodeFence(content string) string {
+	trimmed := strings.TrimSpace(content)
+	trimmed = strings.TrimPrefix(trimmed, "```json")
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	return strings.TrimSpace(trimmed)
 }
 
 func gatewayEventName(requestID string) string {

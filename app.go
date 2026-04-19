@@ -11,13 +11,14 @@ import (
 
 // App struct
 type App struct {
-	ctx        context.Context
-	store      *configStore
-	paths      appPaths
-	zotero     *zoteroService
-	gateway    *gatewayService
-	pdf        *pdfService
-	translator *translator.Manager
+	ctx           context.Context
+	store         *configStore
+	paths         appPaths
+	zotero        *zoteroService
+	gateway       *gatewayService
+	pdf           *pdfService
+	workspaceWiki *workspaceWikiService
+	translator    *translator.Manager
 }
 
 // NewApp creates a new App application struct
@@ -45,6 +46,7 @@ func (a *App) startup(ctx context.Context) {
 	a.zotero = newZoteroService()
 	a.gateway = newGatewayService(store)
 	a.pdf = newPDFService(store)
+	a.workspaceWiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
 }
 
@@ -191,6 +193,13 @@ func (a *App) LoadPDFDocument(pdfPath string) (PDFDocumentPayload, error) {
 
 func (a *App) ExtractPDFMarkdown(pdfPath string) (PDFMarkdownPayload, error) {
 	return a.pdf.ExtractMarkdown(a.ctx, pdfPath)
+}
+
+func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
+	if a.workspaceWiki == nil {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace wiki service is unavailable")
+	}
+	return a.workspaceWiki.StartScan(a.ctx, input)
 }
 
 func (a *App) StreamLLMChat(providerID, modelID int64, prompt string, contextData GatewayContextData) (string, error) {

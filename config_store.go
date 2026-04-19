@@ -96,6 +96,20 @@ func (s *configStore) bootstrap() error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS workspace_wiki_scan_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL,
+			document_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			current_stage TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			provider_id INTEGER NOT NULL DEFAULT 0,
+			model_id INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT NOT NULL DEFAULT '',
+			finished_at TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
@@ -842,6 +856,61 @@ func (s *configStore) GetWorkspace(ctx context.Context, workspaceID string) (Wor
 		return Workspace{}, fmt.Errorf("load workspace: %w", err)
 	}
 	return workspace, nil
+}
+
+func (s *configStore) SaveWorkspaceWikiScanJob(ctx context.Context, job WorkspaceWikiScanJob) (WorkspaceWikiScanJob, error) {
+	workspaceID := strings.TrimSpace(job.WorkspaceID)
+	if workspaceID == "" {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace id is required")
+	}
+	if _, err := s.GetWorkspace(ctx, workspaceID); err != nil {
+		return WorkspaceWikiScanJob{}, err
+	}
+
+	record := WorkspaceWikiScanJob{
+		ID:           job.ID,
+		WorkspaceID:  workspaceID,
+		DocumentID:   strings.TrimSpace(job.DocumentID),
+		Status:       job.Status,
+		CurrentStage: strings.TrimSpace(job.CurrentStage),
+		Message:      strings.TrimSpace(job.Message),
+		ProviderID:   job.ProviderID,
+		ModelID:      job.ModelID,
+		StartedAt:    strings.TrimSpace(job.StartedAt),
+		FinishedAt:   strings.TrimSpace(job.FinishedAt),
+		UpdatedAt:    firstNonEmptyText(strings.TrimSpace(job.UpdatedAt), nowRFC3339()),
+	}
+	if record.Status == "" {
+		record.Status = WorkspaceWikiScanJobQueued
+	}
+
+	if record.ID == 0 {
+		result, err := s.appDB.ExecContext(ctx, `
+			INSERT INTO workspace_wiki_scan_jobs (
+				workspace_id, document_id, status, current_stage, message,
+				provider_id, model_id, started_at, finished_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+		`, record.WorkspaceID, record.DocumentID, string(record.Status), record.CurrentStage, record.Message, record.ProviderID, record.ModelID, record.StartedAt, record.FinishedAt, record.UpdatedAt)
+		if err != nil {
+			return WorkspaceWikiScanJob{}, fmt.Errorf("save workspace wiki scan job: %w", err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return WorkspaceWikiScanJob{}, fmt.Errorf("read workspace wiki scan job id: %w", err)
+		}
+		record.ID = id
+		return record, nil
+	}
+
+	if _, err := s.appDB.ExecContext(ctx, `
+		UPDATE workspace_wiki_scan_jobs
+		SET workspace_id = ?, document_id = ?, status = ?, current_stage = ?, message = ?,
+			provider_id = ?, model_id = ?, started_at = ?, finished_at = ?, updated_at = ?
+		WHERE id = ?;
+	`, record.WorkspaceID, record.DocumentID, string(record.Status), record.CurrentStage, record.Message, record.ProviderID, record.ModelID, record.StartedAt, record.FinishedAt, record.UpdatedAt, record.ID); err != nil {
+		return WorkspaceWikiScanJob{}, fmt.Errorf("update workspace wiki scan job %d: %w", record.ID, err)
+	}
+	return record, nil
 }
 
 func (s *configStore) ListDocumentsByWorkspace(ctx context.Context, workspaceID string) ([]DocumentRecord, error) {
