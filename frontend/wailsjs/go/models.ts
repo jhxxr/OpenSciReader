@@ -12,6 +12,8 @@ export namespace main {
 	    drawingPromptDraft: string;
 	    drawingProviderId: number;
 	    drawingModel: string;
+	    wikiScanProviderId: number;
+	    wikiScanModelId: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AIWorkspaceConfig(source);
@@ -30,6 +32,8 @@ export namespace main {
 	        this.drawingPromptDraft = source["drawingPromptDraft"];
 	        this.drawingProviderId = source["drawingProviderId"];
 	        this.drawingModel = source["drawingModel"];
+	        this.wikiScanProviderId = source["wikiScanProviderId"];
+	        this.wikiScanModelId = source["wikiScanModelId"];
 	    }
 	}
 	export class ChatHistoryEntry {
