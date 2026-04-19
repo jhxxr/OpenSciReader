@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -52,6 +54,25 @@ func TestWorkspaceKnowledgeFilesRoundTrip(t *testing.T) {
 
 	if err := files.WriteSources([]WorkspaceKnowledgeSource{source}); err != nil {
 		t.Fatalf("WriteSources error: %v", err)
+	}
+
+	rawSourcesJSON, err := os.ReadFile(files.SourcesPath())
+	if err != nil {
+		t.Fatalf("ReadFile sources manifest error: %v", err)
+	}
+
+	var sourceRecords []map[string]any
+	if err := json.Unmarshal(rawSourcesJSON, &sourceRecords); err != nil {
+		t.Fatalf("Unmarshal sources manifest error: %v", err)
+	}
+	if len(sourceRecords) != 1 {
+		t.Fatalf("sources manifest len = %d, want 1", len(sourceRecords))
+	}
+	if _, ok := sourceRecords[0]["sourceId"]; !ok {
+		t.Fatalf("sources manifest keys = %#v, want sourceId", sourceRecords[0])
+	}
+	if _, ok := sourceRecords[0]["id"]; ok {
+		t.Fatalf("sources manifest keys = %#v, did not expect id", sourceRecords[0])
 	}
 
 	gotSources, err := files.ReadSources()

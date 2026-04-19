@@ -1,7 +1,7 @@
 package main
 
 type WorkspaceKnowledgeSource struct {
-	ID           string `json:"id"`
+	ID           string `json:"sourceId"`
 	WorkspaceID  string `json:"workspaceId"`
 	Title        string `json:"title"`
 	Slug         string `json:"slug"`
