@@ -146,9 +146,14 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 			claimsChanged = true
 		}
 
-		claim, changed := mergeWorkspaceKnowledgePromotedClaim(existingClaim, canonicalID, workspaceID, WorkspaceKnowledgeCandidate{
-			ID:         canonicalID,
-			Title:      firstNonEmptyText(strings.TrimSpace(candidate.Title), canonicalID),
+		claimID := canonicalID
+		if strings.TrimSpace(existingClaim.ID) != "" {
+			claimID = existingClaim.ID
+		}
+
+		claim, changed := mergeWorkspaceKnowledgePromotedClaim(existingClaim, claimID, workspaceID, WorkspaceKnowledgeCandidate{
+			ID:         claimID,
+			Title:      firstNonEmptyText(strings.TrimSpace(candidate.Title), claimID),
 			Type:       candidate.Type,
 			Summary:    candidate.Summary,
 			EntityIDs:  candidate.EntityIDs,
@@ -158,9 +163,9 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 			PageEnd:    candidate.PageEnd,
 			Excerpt:    candidate.Excerpt,
 		}, now)
-		claimsByID[canonicalID] = claim
+		claimsByID[claimID] = claim
 		claimsChanged = claimsChanged || changed
-		promotedClaimIDs = append(promotedClaimIDs, canonicalID)
+		promotedClaimIDs = append(promotedClaimIDs, claimID)
 	}
 
 	claims := make([]WorkspaceKnowledgeClaim, 0, len(claimsByID))
@@ -928,20 +933,24 @@ func workspaceKnowledgeClaimMatchesCandidate(claim WorkspaceKnowledgeClaim, cand
 	candidateSummary := workspaceKnowledgeStableKeyText(candidate.Summary)
 	candidateEntityIDs := normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs)
 	candidateSourceRefs := uniqueWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
+	claimTitle := workspaceKnowledgeStableKeyText(claim.Title)
+	claimSummary := workspaceKnowledgeStableKeyText(claim.Summary)
+	claimEntityIDs := normalizeWorkspaceKnowledgeStringSlice(claim.EntityIDs)
+	claimSourceRefs := uniqueWorkspaceKnowledgeSourceRefs(claim.SourceRefs)
 
 	if candidateTitle == "" && candidateSummary == "" && len(candidateEntityIDs) == 0 && len(candidateSourceRefs) == 0 {
 		return false
 	}
-	if candidateTitle != "" && workspaceKnowledgeStableKeyText(claim.Title) != candidateTitle {
+	if !workspaceKnowledgeStableTextCompatible(claimTitle, candidateTitle) {
 		return false
 	}
-	if candidateSummary != "" && workspaceKnowledgeStableKeyText(claim.Summary) != candidateSummary {
+	if !workspaceKnowledgeStableTextCompatible(claimSummary, candidateSummary) {
 		return false
 	}
-	if len(candidateEntityIDs) > 0 && !equalWorkspaceKnowledgeStringSlices(normalizeWorkspaceKnowledgeStringSlice(claim.EntityIDs), candidateEntityIDs) {
+	if !workspaceKnowledgeStableStringSlicesCompatible(claimEntityIDs, candidateEntityIDs) {
 		return false
 	}
-	if len(candidateSourceRefs) > 0 && !equalWorkspaceKnowledgeSourceRefAnchors(uniqueWorkspaceKnowledgeSourceRefs(claim.SourceRefs), candidateSourceRefs) {
+	if !workspaceKnowledgeStableSourceRefAnchorsCompatible(claimSourceRefs, candidateSourceRefs) {
 		return false
 	}
 	return true
@@ -1044,6 +1053,27 @@ func equalWorkspaceKnowledgeSourceRefAnchors(left, right []WorkspaceKnowledgeSou
 		}
 	}
 	return true
+}
+
+func workspaceKnowledgeStableTextCompatible(left, right string) bool {
+	if left == "" || right == "" {
+		return true
+	}
+	return left == right
+}
+
+func workspaceKnowledgeStableStringSlicesCompatible(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return true
+	}
+	return equalWorkspaceKnowledgeStringSlices(left, right)
+}
+
+func workspaceKnowledgeStableSourceRefAnchorsCompatible(left, right []WorkspaceKnowledgeSourceRef) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return true
+	}
+	return equalWorkspaceKnowledgeSourceRefAnchors(left, right)
 }
 
 func firstNonZeroFloat(values ...float64) float64 {

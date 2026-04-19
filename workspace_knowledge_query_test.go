@@ -458,6 +458,144 @@ func TestWorkspaceKnowledgePromoteIsIdempotentForIdenticalSourceRefs(t *testing.
 	}
 }
 
+func TestWorkspaceKnowledgePromotePreservesCanonicalIDFromRichToSparseCandidate(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout error: %v", err)
+	}
+
+	service := workspaceKnowledgeQueryService{files: files}
+	richCandidate := WorkspaceKnowledgeCandidate{
+		ID:        "candidate:claim:rich-session-id",
+		Title:     "Contrastive Memory is the main method",
+		Type:      "claim",
+		Summary:   "The workspace centers on Contrastive Memory",
+		EntityIDs: []string{"entity:method:contrastive-memory"},
+		SourceRefs: []WorkspaceKnowledgeSourceRef{{
+			SourceID:  "source:paper-a",
+			PageStart: 3,
+			PageEnd:   3,
+			Excerpt:   "Contrastive Memory excerpt",
+		}},
+	}
+	if err := service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates:  []WorkspaceKnowledgeCandidate{richCandidate},
+	}); err != nil {
+		t.Fatalf("rich Promote error: %v", err)
+	}
+
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath error: %v", err)
+	}
+	var firstClaims []WorkspaceKnowledgeClaim
+	if err := readWorkspaceKnowledgeJSON(claimsPath, &firstClaims); err != nil {
+		t.Fatalf("read first claims error: %v", err)
+	}
+	if len(firstClaims) != 1 {
+		t.Fatalf("len(firstClaims) = %d, want 1", len(firstClaims))
+	}
+	first := firstClaims[0]
+
+	sparseCandidate := WorkspaceKnowledgeCandidate{
+		ID:      "candidate:claim:sparse-session-id",
+		Title:   richCandidate.Title,
+		Type:    "claim",
+		Summary: richCandidate.Summary,
+	}
+	if err := service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates:  []WorkspaceKnowledgeCandidate{sparseCandidate},
+	}); err != nil {
+		t.Fatalf("sparse Promote error: %v", err)
+	}
+
+	var secondClaims []WorkspaceKnowledgeClaim
+	if err := readWorkspaceKnowledgeJSON(claimsPath, &secondClaims); err != nil {
+		t.Fatalf("read second claims error: %v", err)
+	}
+	if len(secondClaims) != 1 {
+		t.Fatalf("len(secondClaims) = %d, want 1", len(secondClaims))
+	}
+	if secondClaims[0].ID != first.ID {
+		t.Fatalf("claim id = %q, want preserved canonical id %q", secondClaims[0].ID, first.ID)
+	}
+}
+
+func TestWorkspaceKnowledgePromotePreservesCanonicalIDFromSparseToRichCandidate(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout error: %v", err)
+	}
+
+	service := workspaceKnowledgeQueryService{files: files}
+	sparseCandidate := WorkspaceKnowledgeCandidate{
+		ID:      "candidate:claim:sparse-session-id",
+		Title:   "Contrastive Memory is the main method",
+		Type:    "claim",
+		Summary: "The workspace centers on Contrastive Memory",
+	}
+	if err := service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates:  []WorkspaceKnowledgeCandidate{sparseCandidate},
+	}); err != nil {
+		t.Fatalf("sparse Promote error: %v", err)
+	}
+
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath error: %v", err)
+	}
+	var firstClaims []WorkspaceKnowledgeClaim
+	if err := readWorkspaceKnowledgeJSON(claimsPath, &firstClaims); err != nil {
+		t.Fatalf("read first claims error: %v", err)
+	}
+	if len(firstClaims) != 1 {
+		t.Fatalf("len(firstClaims) = %d, want 1", len(firstClaims))
+	}
+	first := firstClaims[0]
+
+	richCandidate := WorkspaceKnowledgeCandidate{
+		ID:        "candidate:claim:rich-session-id",
+		Title:     sparseCandidate.Title,
+		Type:      "claim",
+		Summary:   sparseCandidate.Summary,
+		EntityIDs: []string{"entity:method:contrastive-memory"},
+		SourceRefs: []WorkspaceKnowledgeSourceRef{{
+			SourceID:  "source:paper-a",
+			PageStart: 3,
+			PageEnd:   3,
+			Excerpt:   "Contrastive Memory excerpt",
+		}},
+	}
+	if err := service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates:  []WorkspaceKnowledgeCandidate{richCandidate},
+	}); err != nil {
+		t.Fatalf("rich Promote error: %v", err)
+	}
+
+	var secondClaims []WorkspaceKnowledgeClaim
+	if err := readWorkspaceKnowledgeJSON(claimsPath, &secondClaims); err != nil {
+		t.Fatalf("read second claims error: %v", err)
+	}
+	if len(secondClaims) != 1 {
+		t.Fatalf("len(secondClaims) = %d, want 1", len(secondClaims))
+	}
+	if secondClaims[0].ID != first.ID {
+		t.Fatalf("claim id = %q, want preserved canonical id %q", secondClaims[0].ID, first.ID)
+	}
+}
+
 func TestWorkspaceKnowledgeQueryIgnoresConversationLogAppendFailure(t *testing.T) {
 	t.Parallel()
 
