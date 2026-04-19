@@ -561,6 +561,32 @@ export function ReaderAIPanel({
     </div>
   );
 
+  const answerSection = (
+    <div className="reader-answer-section">
+      {copilotState.isAsking && (
+        <div className="reader-answer-loading">
+          <RefreshCw size={20} className="spin-inline" />
+          <span style={{ marginLeft: 8 }}>正在查询知识库...</span>
+        </div>
+      )}
+
+      {!copilotState.isAsking && copilotState.answerError && (
+        <div className="reader-error">{copilotState.answerError}</div>
+      )}
+
+      {!copilotState.isAsking && !copilotState.answerError && !copilotState.answer && (
+        <div className="reader-answer-empty">
+          <Sparkles size={24} />
+          <p>向工作区知识提问获取答案</p>
+        </div>
+      )}
+
+      {!copilotState.isAsking && !copilotState.answerError && copilotState.answer && (
+        <MarkdownPreview content={copilotState.answer} />
+      )}
+    </div>
+  );
+
   function updateWorkspaceConfig(patch: Partial<AIWorkspaceConfig>) {
     setWorkspaceConfig((current) => ({ ...current, ...patch }));
   }
