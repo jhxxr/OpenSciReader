@@ -429,6 +429,62 @@ export function ReaderAIPanel({
     [],
   );
 
+  async function handleAsk() {
+    if (!workspaceId || !activeLLMModel || copilotState.isAsking) {
+      return;
+    }
+
+    setCopilotState(prev => ({ ...prev, isAsking: true, answerError: null }));
+
+    try {
+      const result = await workspaceKnowledgeApi.queryWorkspaceKnowledge(
+        workspaceId,
+        llmProviderId,
+        llmModelId,
+        copilotState.question,
+        {
+          selection: copilotState.scope.selection ? selection.cleaned : undefined,
+          currentPage: copilotState.scope.page ? activePage : undefined,
+          documentId: copilotState.scope.document ? documentId : undefined,
+          workspaceContext: copilotState.scope.workspace,
+        }
+      );
+
+      if (!result) {
+        setCopilotState(prev => ({
+          ...prev,
+          isAsking: false,
+          answer: null,
+          answerError: '无法连接到知识服务',
+        }));
+        return;
+      }
+
+      // Group evidence by kind
+      const evidence = {
+        entities: result.evidence.filter(e => e.kind === 'entity'),
+        claims: result.evidence.filter(e => e.kind === 'claim'),
+        tasks: result.evidence.filter(e => e.kind === 'task'),
+        sources: result.evidence.filter(e => e.kind === 'wiki_page' || e.kind === 'raw_excerpt'),
+      };
+
+      setCopilotState(prev => ({
+        ...prev,
+        isAsking: false,
+        answer: result.answer,
+        evidence,
+        candidates: result.candidates,
+      }));
+    } catch (error) {
+      setCopilotState(prev => ({
+        ...prev,
+        isAsking: false,
+        answer: null,
+        answerError: getErrorMessage(error, '查询失败'),
+      }));
+    }
+  }
+
   const providerHint = activeLLMModel
     ? `${activeLLMConfig?.provider.name ?? "LLM"} / ${activeLLMModel.modelId}`
     : "请选择可用的 LLM Provider 和 Model";
