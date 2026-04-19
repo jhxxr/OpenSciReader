@@ -11,6 +11,7 @@ import {
 import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
 import { configApi } from "../api/config";
 import { gatewayApi } from "../api/gateway";
+import { workspaceKnowledgeApi } from "../api/workspaceKnowledge";
 import { historyApi } from "../api/history";
 import {
   loadPDFTextChunks,
@@ -31,6 +32,11 @@ import { DEFAULT_AI_WORKSPACE_CONFIG } from "../types/config";
 import type { GatewayStreamEvent } from "../types/gateway";
 import type { ChatHistoryEntry } from "../types/history";
 import type { TabItem } from "../store/tabStore";
+import type {
+  WorkspaceKnowledgeQueryResult,
+  WorkspaceKnowledgeEvidenceHit,
+  WorkspaceKnowledgeCandidate,
+} from "../api/workspaceKnowledge";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { Button } from "./ui/Button";
 
@@ -71,6 +77,40 @@ interface PresetCard {
   description: string;
   requiresSelection?: boolean;
 }
+
+interface CopilotState {
+  question: string;
+  scope: {
+    selection: boolean;
+    page: boolean;
+    document: boolean;
+    workspace: boolean;
+  };
+  isAsking: boolean;
+  answer: string | null;
+  answerError: string | null;
+  evidence: {
+    entities: WorkspaceKnowledgeEvidenceHit[];
+    claims: WorkspaceKnowledgeEvidenceHit[];
+    tasks: WorkspaceKnowledgeEvidenceHit[];
+    sources: WorkspaceKnowledgeEvidenceHit[];
+  };
+  expandedGroups: {
+    entities: boolean;
+    claims: boolean;
+    tasks: boolean;
+    sources: boolean;
+  };
+  candidates: WorkspaceKnowledgeCandidate[];
+  expandedCandidates: Set<string>;
+  promotingIds: Set<string>;
+  promoteError: string | null;
+}
+
+function getErrorMessage(error: unknown, context: string): string;
+function renderConfidenceBadge(confidence: number): React.ReactNode | null;
+function formatSourceSummary(sourceRefs: any[]): string;
+function formatSourceRefLabel(sourceRef: any): string;
 
 const PRESET_CARDS: PresetCard[] = [
   {
