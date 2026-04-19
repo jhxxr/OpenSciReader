@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNod
 import { BookOpen, FileText, Home, Plus, Settings2, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import './App.css';
 import { configApi } from './api/config';
+import { workspaceKnowledgeApi } from './api/workspaceKnowledge';
 import { workspaceApi } from './api/workspace';
 import { ModelDiscoveryModal } from './components/ModelDiscoveryModal';
 import { HomePage } from './components/HomePage';
@@ -33,6 +34,11 @@ import {
   type ProviderRecord,
   type ProviderUpsertInput,
 } from './types/config';
+import type {
+  WorkspaceKnowledgeClaim,
+  WorkspaceKnowledgeEntity,
+  WorkspaceKnowledgeTask,
+} from './types/workspaceKnowledge';
 
 const EMPTY_LLM_FORM: ProviderUpsertInput = {
   name: '',
@@ -68,6 +74,24 @@ const EMPTY_MODEL_FORM: ModelUpsertInput = {
   providerId: 0,
   modelId: '',
   contextWindow: 0,
+};
+
+interface WorkspaceTabKnowledgeState {
+  entities: WorkspaceKnowledgeEntity[];
+  claims: WorkspaceKnowledgeClaim[];
+  tasks: WorkspaceKnowledgeTask[];
+  isLoading: boolean;
+  error: string | null;
+  hasLoaded: boolean;
+}
+
+const EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE: WorkspaceTabKnowledgeState = {
+  entities: [],
+  claims: [],
+  tasks: [],
+  isLoading: false,
+  error: null,
+  hasLoaded: false,
 };
 
 function normalizeModelKey(value: string): string {
@@ -122,6 +146,72 @@ export default function App() {
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [runtimeImportPath, setRuntimeImportPath] = useState('');
   const [runtimeImportProgress, setRuntimeImportProgress] = useState<PDFTranslateRuntimeImportProgress | null>(null);
+  const [workspaceTabKnowledge, setWorkspaceTabKnowledge] = useState<Record<string, WorkspaceTabKnowledgeState>>({});
+
+  const ensureWorkspaceTabKnowledge = useCallback(
+    async (workspaceId: string, options?: { force?: boolean }) => {
+      const normalizedWorkspaceId = workspaceId.trim();
+      if (normalizedWorkspaceId === '') {
+        return;
+      }
+
+      let shouldLoad = true;
+      setWorkspaceTabKnowledge((current) => {
+        const existing = current[normalizedWorkspaceId];
+        if (existing?.isLoading || (existing?.hasLoaded && !options?.force)) {
+          shouldLoad = false;
+          return current;
+        }
+
+        return {
+          ...current,
+          [normalizedWorkspaceId]: {
+            entities: existing?.entities ?? [],
+            claims: existing?.claims ?? [],
+            tasks: existing?.tasks ?? [],
+            isLoading: true,
+            error: null,
+            hasLoaded: existing?.hasLoaded ?? false,
+          },
+        };
+      });
+
+      if (!shouldLoad) {
+        return;
+      }
+
+      try {
+        const [entities, claims, tasks] = await Promise.all([
+          workspaceKnowledgeApi.listEntities(normalizedWorkspaceId),
+          workspaceKnowledgeApi.listClaims(normalizedWorkspaceId),
+          workspaceKnowledgeApi.listTasks(normalizedWorkspaceId),
+        ]);
+
+        setWorkspaceTabKnowledge((current) => ({
+          ...current,
+          [normalizedWorkspaceId]: {
+            entities,
+            claims,
+            tasks,
+            isLoading: false,
+            error: null,
+            hasLoaded: true,
+          },
+        }));
+      } catch (error) {
+        setWorkspaceTabKnowledge((current) => ({
+          ...current,
+          [normalizedWorkspaceId]: {
+            ...(current[normalizedWorkspaceId] ?? EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE),
+            isLoading: false,
+            error: getErrorMessage(error, '加载工作区记忆失败'),
+            hasLoaded: true,
+          },
+        }));
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void loadConfig();
@@ -134,6 +224,12 @@ export default function App() {
   useEffect(() => {
     void workspace.loadWorkspaces();
   }, [workspace.loadWorkspaces]);
+
+  useEffect(() => {
+    if (workspace.activeWorkspaceId) {
+      void ensureWorkspaceTabKnowledge(workspace.activeWorkspaceId);
+    }
+  }, [ensureWorkspaceTabKnowledge, workspace.activeWorkspaceId]);
 
   useEffect(() => configApi.subscribePDFTranslateRuntimeImportProgress(setRuntimeImportProgress), []);
 
@@ -184,11 +280,24 @@ export default function App() {
     () => new Set(selectedModelProviderModels.map((item) => normalizeModelKey(item.modelId))),
     [selectedModelProviderModels],
   );
+  const activeWorkspaceTabKnowledge = useMemo(
+    () =>
+      workspace.activeWorkspaceId
+        ? (workspaceTabKnowledge[workspace.activeWorkspaceId] ?? EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE)
+        : EMPTY_WORKSPACE_TAB_KNOWLEDGE_STATE,
+    [workspace.activeWorkspaceId, workspaceTabKnowledge],
+  );
 
   const discoveryProviderConfig = useMemo(
     () => llmProviderConfigs.find((item) => item.provider.id === discoveryProviderId) ?? null,
     [llmProviderConfigs, discoveryProviderId],
   );
+  const handleRefreshWorkspaceKnowledge = useCallback(async () => {
+    if (!workspace.activeWorkspaceId) {
+      return;
+    }
+    await ensureWorkspaceTabKnowledge(workspace.activeWorkspaceId, { force: true });
+  }, [ensureWorkspaceTabKnowledge, workspace.activeWorkspaceId]);
 
   const handleOpenPdfTab = useCallback(
     (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => {
@@ -517,6 +626,12 @@ export default function App() {
             }}
             onImportZoteroItem={handleImportZoteroItem}
             onOpenPdf={handleOpenPdfTab}
+            workspaceKnowledgeEntities={activeWorkspaceTabKnowledge.entities}
+            workspaceKnowledgeClaims={activeWorkspaceTabKnowledge.claims}
+            workspaceKnowledgeTasks={activeWorkspaceTabKnowledge.tasks}
+            isWorkspaceKnowledgeLoading={activeWorkspaceTabKnowledge.isLoading}
+            workspaceKnowledgeError={activeWorkspaceTabKnowledge.error}
+            onRefreshWorkspaceKnowledge={handleRefreshWorkspaceKnowledge}
           />
         ) : (
           tabs

@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  LoaderCircle,
-  RefreshCw,
-  SquareX,
-  Trash2,
-} from 'lucide-react';
+import { LoaderCircle, RefreshCw, SquareX, Trash2 } from 'lucide-react';
 import { pdfTranslateApi } from '../api/pdfTranslate';
 import {
   formatRelativeTimestamp,
@@ -17,22 +12,55 @@ import {
   getJobSummaryLine,
   shouldUseIndeterminateProgress,
 } from '../lib/pdfTranslatePresentation';
-import { Button } from './ui/Button';
-import type { PDFTranslateJobSnapshot } from '../types/pdfTranslate';
-import type { CollectionTree } from '../types/zotero';
-import type { ZoteroState } from '../store/zoteroStore';
 import { useTabStore } from '../store/tabStore';
 import type { WorkspaceState } from '../store/workspaceStore';
+import type { ZoteroState } from '../store/zoteroStore';
+import type { PDFTranslateJobSnapshot } from '../types/pdfTranslate';
+import type {
+  WorkspaceKnowledgeClaim,
+  WorkspaceKnowledgeEntity,
+  WorkspaceKnowledgeTask,
+} from '../types/workspaceKnowledge';
+import type { CollectionTree } from '../types/zotero';
+import { WorkspaceTab } from './WorkspaceTab';
+import { Button } from './ui/Button';
 
 interface HomePageProps {
   zotero: ZoteroState;
   workspace: WorkspaceState;
   onImportFiles: () => Promise<void>;
   onImportZoteroItem: (item: { id: string; title: string; pdfPath: string; citeKey: string }) => Promise<void>;
-  onOpenPdf: (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => void;
+  onOpenPdf: (item: {
+    id: string;
+    title: string;
+    pdfPath: string | null;
+    workspaceId?: string;
+    documentId?: string;
+    sourceKind?: 'workspace_document' | 'zotero_item';
+    itemType?: string;
+    citeKey?: string;
+  }) => void;
+  workspaceKnowledgeEntities: WorkspaceKnowledgeEntity[];
+  workspaceKnowledgeClaims: WorkspaceKnowledgeClaim[];
+  workspaceKnowledgeTasks: WorkspaceKnowledgeTask[];
+  isWorkspaceKnowledgeLoading: boolean;
+  workspaceKnowledgeError: string | null;
+  onRefreshWorkspaceKnowledge: () => Promise<void>;
 }
 
-export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem, onOpenPdf }: HomePageProps) {
+export function HomePage({
+  zotero,
+  workspace,
+  onImportFiles,
+  onImportZoteroItem,
+  onOpenPdf,
+  workspaceKnowledgeEntities,
+  workspaceKnowledgeClaims,
+  workspaceKnowledgeTasks,
+  isWorkspaceKnowledgeLoading,
+  workspaceKnowledgeError,
+  onRefreshWorkspaceKnowledge,
+}: HomePageProps) {
   const [jobs, setJobs] = useState<PDFTranslateJobSnapshot[]>([]);
   const [jobError, setJobError] = useState<string | null>(null);
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
@@ -41,6 +69,10 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const tabs = useTabStore((state) => state.tabs);
   const closeTab = useTabStore((state) => state.closeTab);
+  const activeWorkspace = useMemo(
+    () => workspace.workspaces.find((item: { id: string }) => item.id === workspace.activeWorkspaceId) ?? null,
+    [workspace.activeWorkspaceId, workspace.workspaces],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -78,10 +110,7 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
   }, []);
 
   const visibleJobs = useMemo(() => jobs.slice(0, 10), [jobs]);
-  const runningJobs = useMemo(
-    () => jobs.filter((job) => job.status === 'running').length,
-    [jobs],
-  );
+  const runningJobs = useMemo(() => jobs.filter((job) => job.status === 'running').length, [jobs]);
 
   async function handleRefreshJobs() {
     setIsLoadingJobs(true);
@@ -100,9 +129,7 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     setCancellingJobId(job.jobId);
     try {
       const snapshot = await pdfTranslateApi.cancel(job.jobId);
-      setJobs((current) =>
-        [snapshot, ...current.filter((item) => item.jobId !== snapshot.jobId)].sort(compareJobsByTime),
-      );
+      setJobs((current) => [snapshot, ...current.filter((item) => item.jobId !== snapshot.jobId)].sort(compareJobsByTime));
       setJobError(null);
     } catch (error) {
       setJobError(error instanceof Error ? error.message : '取消翻译任务失败');
@@ -115,7 +142,7 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     const confirmed =
       typeof window === 'undefined'
         ? true
-        : window.confirm(`确认删除任务“${job.itemTitle || job.jobId}”？此操作会移除任务记录和本地产物目录。`);
+        : window.confirm(`确认删除任务“${job.itemTitle || job.jobId}”吗？此操作会移除任务记录和本地产物目录。`);
     if (!confirmed) {
       return;
     }
@@ -145,7 +172,7 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     const confirmed =
       typeof window === 'undefined'
         ? true
-        : window.confirm('\u786e\u8ba4\u4ece\u5f53\u524d\u5de5\u4f5c\u533a\u5220\u9664\u6587\u6863 "' + label + '" \u5417\uff1f\u8fd9\u4f1a\u79fb\u9664\u672c\u5730\u526f\u672c\u3001\u7b14\u8bb0\u548c\u804a\u5929\u8bb0\u5f55\u3002');
+        : window.confirm(`确认从当前工作区删除文档 "${label}" 吗？这会移除本地副本、笔记和聊天记录。`);
     if (!confirmed) {
       return;
     }
@@ -153,12 +180,11 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     setDeletingDocumentId(document.id);
     try {
       await workspace.deleteDocument(document.id);
-      const matchingTab = tabs.find(
-        (tab) => tab.workspaceId === document.workspaceId && tab.documentId === document.id,
-      );
+      const matchingTab = tabs.find((tab) => tab.workspaceId === document.workspaceId && tab.documentId === document.id);
       if (matchingTab) {
         closeTab(matchingTab.id);
       }
+      await onRefreshWorkspaceKnowledge();
     } catch {
     } finally {
       setDeletingDocumentId(null);
@@ -169,72 +195,49 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
     <div className="home-page">
       <div className="home-body">
         <h2 className="home-section-title">工作区</h2>
-        <div className="home-workspace-grid">
-          <div className="home-workspace-card">
-            <div className="section-header">
-              <h3>{workspace.workspaces.find((item: { id: string }) => item.id === workspace.activeWorkspaceId)?.name ?? '未选择工作区'}</h3>
-              <span className="badge badge-count">{workspace.documents.length}</span>
-            </div>
-            <p className="home-workspace-description">
-              {workspace.workspaces.find((item: { id: string }) => item.id === workspace.activeWorkspaceId)?.description || '把论文导入到 OpenSciReader 自有数据目录，并围绕当前研究主题组织文档。'}
-            </p>
-            <div className="home-workspace-actions">
-              <Button variant="secondary" size="sm" onClick={() => void onImportFiles()} disabled={workspace.isImporting || !workspace.activeWorkspaceId}>
-                {workspace.isImporting ? '导入中...' : '导入文件'}
-              </Button>
-            </div>
-          </div>
-          <div className="home-workspace-card">
-            <div className="section-header">
-              <h3>当前文档</h3>
-              <span className="badge badge-count">{workspace.documents.length}</span>
-            </div>
-            {workspace.documents.length ? (
-              <div className="library-item-list">
-                {workspace.documents.map((document: { id: string; workspaceId: string; title: string; primaryPdfPath: string; originalFileName: string; sourceType: string }) => (
-                  <div key={document.id} className="item-button-card home-workspace-document-card">
-                    <button
-                      type="button"
-                      className="item-button home-workspace-document-button"
-                      onDoubleClick={() => onOpenPdf({ id: document.id, title: document.title, pdfPath: document.primaryPdfPath ?? null, workspaceId: document.workspaceId, documentId: document.id, sourceKind: 'workspace_document' })}
-                    >
-                    <strong>{document.title}</strong>
-                    <small>{document.originalFileName || '已导入文档'} · {document.sourceType}</small>
-                    </button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="home-workspace-document-delete danger"
-                      onClick={() => void handleDeleteWorkspaceDocument(document)}
-                      disabled={deletingDocumentId === document.id}
-                      aria-label={`删除 ${document.title}`}
-                      title={`删除 ${document.title}`}
-                    >
-                      {deletingDocumentId === document.id ? <LoaderCircle size={14} className="spin-inline" /> : <Trash2 size={14} />}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : <p className="empty-inline">当前工作区还没有文档，先从本地导入 PDF 或 Markdown。</p>}
-          </div>
-        </div>
+        <WorkspaceTab
+          workspace={activeWorkspace}
+          documents={workspace.documents}
+          isImporting={workspace.isImporting}
+          deletingDocumentId={deletingDocumentId}
+          knowledgeEntities={workspaceKnowledgeEntities}
+          knowledgeClaims={workspaceKnowledgeClaims}
+          knowledgeTasks={workspaceKnowledgeTasks}
+          isKnowledgeLoading={isWorkspaceKnowledgeLoading}
+          knowledgeError={workspaceKnowledgeError}
+          onImportFiles={onImportFiles}
+          onRefreshKnowledge={onRefreshWorkspaceKnowledge}
+          onOpenPdf={onOpenPdf}
+          onDeleteDocument={handleDeleteWorkspaceDocument}
+        />
 
         <h2 className="home-section-title">导入源</h2>
         <div className="home-library">
           <div className="home-library-tree">
-            <div className="section-header"><h3>文献目录</h3><span className="badge badge-count">{zotero.collections.length}</span></div>
+            <div className="section-header">
+              <h3>文献目录</h3>
+              <span className="badge badge-count">{zotero.collections.length}</span>
+            </div>
             <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--osr-text-muted)' }}>
               {zotero.demoMode ? '演示模式：请确认 Zotero 正在运行。' : '已连接 Zotero 本地 API'}
             </p>
             <div className="tree-list">
               {zotero.collections.map((collection) => (
-                <CollectionNode key={collection.id} node={collection} selectedCollectionId={zotero.selectedCollectionId} onSelect={(id) => void zotero.selectCollection(id)} />
+                <CollectionNode
+                  key={collection.id}
+                  node={collection}
+                  selectedCollectionId={zotero.selectedCollectionId}
+                  onSelect={(id) => void zotero.selectCollection(id)}
+                />
               ))}
             </div>
           </div>
 
           <div className="home-library-items">
-            <div className="section-header"><h3>当前文献</h3><span className="badge badge-count">{zotero.items.length}</span></div>
+            <div className="section-header">
+              <h3>当前文献</h3>
+              <span className="badge badge-count">{zotero.items.length}</span>
+            </div>
             {zotero.items.length ? (
               <div className="library-item-list">
                 {zotero.items.map((item) => (
@@ -242,17 +245,35 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
                     <button
                       type="button"
                       className="item-button item-button-card"
-                      onDoubleClick={() => onOpenPdf({ id: item.id, title: item.title, pdfPath: item.pdfPath ?? null, sourceKind: 'zotero_item', itemType: item.itemType, citeKey: item.citeKey })}
+                      onDoubleClick={() =>
+                        onOpenPdf({
+                          id: item.id,
+                          title: item.title,
+                          pdfPath: item.pdfPath ?? null,
+                          sourceKind: 'zotero_item',
+                          itemType: item.itemType,
+                          citeKey: item.citeKey,
+                        })
+                      }
                       onClick={() => zotero.selectItem(item)}
                     >
                       <strong>{item.title}</strong>
-                      <small>{item.year || 'Unknown year'} · {item.citeKey} {item.hasPdf ? 'PDF' : ''}</small>
+                      <small>
+                        {item.year || 'Unknown year'} / {item.citeKey} {item.hasPdf ? 'PDF' : ''}
+                      </small>
                     </button>
                     <div className="home-workspace-actions">
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => void onImportZoteroItem({ id: item.id, title: item.title, pdfPath: item.pdfPath, citeKey: item.citeKey })}
+                        onClick={() =>
+                          void onImportZoteroItem({
+                            id: item.id,
+                            title: item.title,
+                            pdfPath: item.pdfPath,
+                            citeKey: item.citeKey,
+                          })
+                        }
                         disabled={!item.pdfPath || workspace.isImporting || !workspace.activeWorkspaceId}
                       >
                         导入到当前工作区
@@ -261,7 +282,9 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
                   </div>
                 ))}
               </div>
-            ) : <p className="empty-inline">从左侧目录选择后，这里会列出当前集合的文献条目。</p>}
+            ) : (
+              <p className="empty-inline">从左侧目录选择后，这里会列出当前集合的文献条目。</p>
+            )}
           </div>
         </div>
 
@@ -291,7 +314,9 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
                           <span className="badge badge-count">{job.pageCount} 页</span>
                         </div>
                         <h3>{job.itemTitle || '未命名 PDF 任务'}</h3>
-                        <p>{job.providerName} / {job.modelId}</p>
+                        <p>
+                          {job.providerName} / {job.modelId}
+                        </p>
                       </div>
                       <div className="row-actions">
                         <Button variant="secondary" size="sm" onClick={() => handleOpenTaskPdf(job)}>
@@ -312,7 +337,7 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
                           onClick={() => void handleDeleteJob(job)}
                           disabled={job.status === 'running' || deletingJobId === job.jobId}
                         >
-                          <Trash2 size={14} />
+                          {deletingJobId === job.jobId ? <LoaderCircle size={14} className="spin-inline" /> : <Trash2 size={14} />}
                           {deletingJobId === job.jobId ? '删除中...' : '删除任务'}
                         </Button>
                       </div>
@@ -341,11 +366,8 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
 
                     <div className="home-task-chunks">
                       {job.chunks.map((chunk) => (
-                        <span
-                          key={`${job.jobId}-${chunk.index}`}
-                          className={`home-task-chunk home-task-chunk-${chunk.status}`}
-                        >
-                          {getChunkCaption(chunk)} · {getChunkStatusLabel(chunk.status)}
+                        <span key={`${job.jobId}-${chunk.index}`} className={`home-task-chunk home-task-chunk-${chunk.status}`}>
+                          {getChunkCaption(chunk)} / {getChunkStatusLabel(chunk.status)}
                         </span>
                       ))}
                     </div>
@@ -359,7 +381,9 @@ export function HomePage({ zotero, workspace, onImportFiles, onImportZoteroItem,
             </div>
           ) : (
             <div className="home-task-empty">
-              <div className="feature-card-icon"><LoaderCircle size={22} /></div>
+              <div className="feature-card-icon">
+                <LoaderCircle size={22} />
+              </div>
               <h3>暂无 PDF 翻译任务</h3>
               <p>在阅读页启动保留格式翻译预览后，这里会统一显示预览任务进度、使用模型和当前状态。</p>
             </div>
