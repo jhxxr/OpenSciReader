@@ -597,6 +597,59 @@ export function ReaderAIPanel({
     }));
   }
 
+  function toggleCandidateExpand(candidateId: string) {
+    setCopilotState(prev => {
+      const newExpanded = new Set(prev.expandedCandidates);
+      if (newExpanded.has(candidateId)) {
+        newExpanded.delete(candidateId);
+      } else {
+        newExpanded.add(candidateId);
+      }
+      return { ...prev, expandedCandidates: newExpanded };
+    });
+  }
+
+  async function handlePromote(candidateId: string) {
+    if (!workspaceId || copilotState.promotingIds.has(candidateId)) {
+      return;
+    }
+
+    setCopilotState(prev => {
+      const newPromoting = new Set(prev.promotingIds);
+      newPromoting.add(candidateId);
+      return { ...prev, promotingIds: newPromoting, promoteError: null };
+    });
+
+    try {
+      const candidate = copilotState.candidates.find(c => c.id === candidateId);
+      if (!candidate) {
+        throw new Error('Candidate not found');
+      }
+
+      await workspaceKnowledgeApi.promoteCandidates(workspaceId, [candidate]);
+
+      setCopilotState(prev => ({
+        ...prev,
+        candidates: prev.candidates.filter(c => c.id !== candidateId),
+        promotingIds: (() => {
+          const next = new Set(prev.promotingIds);
+          next.delete(candidateId);
+          return next;
+        })(),
+      }));
+    } catch (error) {
+      setCopilotState(prev => {
+        const nextPromoting = new Set(prev.promotingIds);
+        nextPromoting.delete(candidateId);
+        return {
+          ...prev,
+          promotingIds: nextPromoting,
+          promoteError: getErrorMessage(error, 'Promote failed'),
+        };
+      });
+    }
+  }
+
   const evidenceSection = (
     <div className="reader-evidence-section">
       {['entities', 'claims', 'tasks', 'sources'].map((group) => (
@@ -640,6 +693,69 @@ export function ReaderAIPanel({
               {group === 'sources' && '暂无来源'}
             </div>
           )}
+        </div>
+      ))}
+    </div>
+  );
+
+  const promoteSection = (
+    <div className="reader-promote-section">
+      <h3>Candidate Memories</h3>
+      {copilotState.promoteError && <div className="reader-error">{copilotState.promoteError}</div>}
+
+      {copilotState.candidates.length === 0 && !copilotState.promoteError && (
+        <p className="empty-inline">No candidate memories extracted.</p>
+      )}
+
+      {copilotState.candidates.map((candidate) => (
+        <div key={candidate.id} className="candidate-item">
+          <div className="candidate-summary">
+            <div className="candidate-summary-main">
+              <div className="candidate-title">{candidate.title}</div>
+              <div className="candidate-meta">
+                <span className="badge">{candidate.type}</span>
+                {renderConfidenceBadge(candidate.confidence || 0)}
+              </div>
+            </div>
+          </div>
+
+          {copilotState.expandedCandidates.has(candidate.id) && (
+            <div className="candidate-details">
+              <p>{candidate.summary}</p>
+              {candidate.aliases && candidate.aliases.length > 0 && (
+                <div className="candidate-aliases">
+                  {candidate.aliases.slice(0, 3).map((alias) => (
+                    <span key={alias} className="alias-pill">{alias}</span>
+                  ))}
+                  {candidate.aliases.length > 3 && (
+                    <span className="alias-pill">+{candidate.aliases.length - 3}</span>
+                  )}
+                </div>
+              )}
+              {candidate.entityIds && candidate.entityIds.length > 0 && (
+                <small>Linked entities: {candidate.entityIds.length}</small>
+              )}
+              <small className="candidate-source-footnote">{formatSourceSummary(candidate.sourceRefs)}</small>
+            </div>
+          )}
+
+          <div className="candidate-actions">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => handlePromote(candidate.id)}
+              disabled={copilotState.promotingIds.has(candidate.id)}
+            >
+              {copilotState.promotingIds.has(candidate.id) ? 'Promoting...' : 'Promote'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => toggleCandidateExpand(candidate.id)}
+            >
+              {copilotState.expandedCandidates.has(candidate.id) ? '收起' : '展开'}
+            </Button>
+          </div>
         </div>
       ))}
     </div>

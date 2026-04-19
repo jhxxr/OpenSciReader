@@ -38,6 +38,7 @@ export interface WorkspaceKnowledgeEvidenceHit {
   summary: string;
   excerpt: string;
   sourceRefs: WorkspaceKnowledgeSourceRef[];
+  confidence?: number;
 }
 
 export interface WorkspaceKnowledgeCandidate {
@@ -53,6 +54,7 @@ export interface WorkspaceKnowledgeCandidate {
   pageEnd: number;
   excerpt: string;
   sourceRefs: WorkspaceKnowledgeSourceRef[];
+  confidence?: number;
 }
 
 function isWailsApp(value: unknown): value is { go: { main: { App: WailsWorkspaceKnowledgeApp } } } {
