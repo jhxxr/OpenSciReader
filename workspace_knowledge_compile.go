@@ -93,6 +93,9 @@ func readWorkspaceKnowledgeBySourceRecords(files workspaceKnowledgeFiles) ([]wor
 		}
 		return lessSource(records[i].Payload.Source, records[j].Payload.Source)
 	})
+	if err := validateUniqueWorkspaceKnowledgeSourceIDs(records); err != nil {
+		return nil, err
+	}
 	return records, nil
 }
 
@@ -265,7 +268,9 @@ func mapSources(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledge
 func mapEntities(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeEntity {
 	entities := make([]WorkspaceKnowledgeEntity, 0)
 	for _, record := range records {
-		entities = append(entities, record.Payload.Entities...)
+		for _, entity := range record.Payload.Entities {
+			entities = append(entities, normalizeWorkspaceKnowledgeEntity(entity))
+		}
 	}
 	sort.Slice(entities, func(i, j int) bool {
 		return lessEntity(entities[i], entities[j])
@@ -276,7 +281,9 @@ func mapEntities(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledg
 func mapClaims(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeClaim {
 	claims := make([]WorkspaceKnowledgeClaim, 0)
 	for _, record := range records {
-		claims = append(claims, record.Payload.Claims...)
+		for _, claim := range record.Payload.Claims {
+			claims = append(claims, normalizeWorkspaceKnowledgeClaim(claim))
+		}
 	}
 	sort.Slice(claims, func(i, j int) bool {
 		return lessClaim(claims[i], claims[j])
@@ -287,7 +294,9 @@ func mapClaims(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeC
 func mapRelations(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeRelation {
 	relations := make([]WorkspaceKnowledgeRelation, 0)
 	for _, record := range records {
-		relations = append(relations, record.Payload.Relations...)
+		for _, relation := range record.Payload.Relations {
+			relations = append(relations, normalizeWorkspaceKnowledgeRelation(relation))
+		}
 	}
 	sort.Slice(relations, func(i, j int) bool {
 		return lessRelation(relations[i], relations[j])
@@ -298,7 +307,9 @@ func mapRelations(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowled
 func mapTasks(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeTask {
 	tasks := make([]WorkspaceKnowledgeTask, 0)
 	for _, record := range records {
-		tasks = append(tasks, record.Payload.Tasks...)
+		for _, task := range record.Payload.Tasks {
+			tasks = append(tasks, normalizeWorkspaceKnowledgeTask(task))
+		}
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		return lessTask(tasks[i], tasks[j])
@@ -566,6 +577,63 @@ func buildSourceDocSlugs(records []workspaceKnowledgeBySourceRecord) map[string]
 		sourceDocSlugs[record.Payload.Source.ID] = record.CanonicalSlug
 	}
 	return sourceDocSlugs
+}
+
+func validateUniqueWorkspaceKnowledgeSourceIDs(records []workspaceKnowledgeBySourceRecord) error {
+	seen := make(map[string]string, len(records))
+	for _, record := range records {
+		sourceID := record.Payload.Source.ID
+		if firstSlug, exists := seen[sourceID]; exists {
+			return fmt.Errorf("duplicate workspace knowledge source id %q in by-source files %q and %q", sourceID, firstSlug, record.CanonicalSlug)
+		}
+		seen[sourceID] = record.CanonicalSlug
+	}
+	return nil
+}
+
+func normalizeWorkspaceKnowledgeEntity(entity WorkspaceKnowledgeEntity) WorkspaceKnowledgeEntity {
+	entity.Aliases = append([]string(nil), entity.Aliases...)
+	sort.Strings(entity.Aliases)
+	entity.SourceRefs = normalizeWorkspaceKnowledgeSourceRefs(entity.SourceRefs)
+	return entity
+}
+
+func normalizeWorkspaceKnowledgeClaim(claim WorkspaceKnowledgeClaim) WorkspaceKnowledgeClaim {
+	claim.EntityIDs = append([]string(nil), claim.EntityIDs...)
+	sort.Strings(claim.EntityIDs)
+	claim.SourceRefs = normalizeWorkspaceKnowledgeSourceRefs(claim.SourceRefs)
+	return claim
+}
+
+func normalizeWorkspaceKnowledgeRelation(relation WorkspaceKnowledgeRelation) WorkspaceKnowledgeRelation {
+	relation.SourceRefs = normalizeWorkspaceKnowledgeSourceRefs(relation.SourceRefs)
+	return relation
+}
+
+func normalizeWorkspaceKnowledgeTask(task WorkspaceKnowledgeTask) WorkspaceKnowledgeTask {
+	task.SourceRefs = normalizeWorkspaceKnowledgeSourceRefs(task.SourceRefs)
+	return task
+}
+
+func normalizeWorkspaceKnowledgeSourceRefs(sourceRefs []WorkspaceKnowledgeSourceRef) []WorkspaceKnowledgeSourceRef {
+	normalized := append([]WorkspaceKnowledgeSourceRef(nil), sourceRefs...)
+	sort.Slice(normalized, func(i, j int) bool {
+		return lessWorkspaceKnowledgeSourceRef(normalized[i], normalized[j])
+	})
+	return normalized
+}
+
+func lessWorkspaceKnowledgeSourceRef(left, right WorkspaceKnowledgeSourceRef) bool {
+	if left.SourceID != right.SourceID {
+		return left.SourceID < right.SourceID
+	}
+	if left.PageStart != right.PageStart {
+		return left.PageStart < right.PageStart
+	}
+	if left.PageEnd != right.PageEnd {
+		return left.PageEnd < right.PageEnd
+	}
+	return left.Excerpt < right.Excerpt
 }
 
 func renderConceptClaims(claims []WorkspaceKnowledgeClaim) string {
