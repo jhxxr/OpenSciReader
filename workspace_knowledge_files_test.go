@@ -240,6 +240,33 @@ func TestWorkspaceKnowledgeFilesRejectsTraversalPathSegments(t *testing.T) {
 	}
 }
 
+func TestWorkspaceKnowledgeFilesRejectsWindowsInvalidPathCharacters(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+
+	invalidSlug := "paper:a"
+	if _, err := files.ExtractPath(invalidSlug); err == nil {
+		t.Fatalf("ExtractPath expected error for slug %q", invalidSlug)
+	}
+	if _, err := files.BySourcePath(invalidSlug); err == nil {
+		t.Fatalf("BySourcePath expected error for slug %q", invalidSlug)
+	}
+	if err := files.WriteBySource(invalidSlug, WorkspaceKnowledgeBySourcePayload{}); err == nil {
+		t.Fatalf("WriteBySource expected error for slug %q", invalidSlug)
+	}
+
+	invalidScanRunID := "scan-run:1"
+	if _, err := files.ScanRunPath(invalidScanRunID); err == nil {
+		t.Fatalf("ScanRunPath expected error for scan run ID %q", invalidScanRunID)
+	}
+	if err := files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{ID: invalidScanRunID}); err == nil {
+		t.Fatalf("WriteScanRun expected error for scan run ID %q", invalidScanRunID)
+	}
+}
+
 func TestWorkspaceKnowledgeFilesWriteScanRun(t *testing.T) {
 	t.Parallel()
 

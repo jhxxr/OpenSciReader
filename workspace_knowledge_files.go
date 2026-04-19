@@ -235,8 +235,8 @@ func validateWorkspaceKnowledgePathSegment(name, value string) (string, error) {
 	if filepath.IsAbs(trimmedValue) {
 		return "", fmt.Errorf("%s must not be absolute", name)
 	}
-	if strings.ContainsAny(trimmedValue, `/\`) {
-		return "", fmt.Errorf("%s must not contain path separators", name)
+	if strings.ContainsAny(trimmedValue, `<>:"/\|?*`) {
+		return "", fmt.Errorf("%s must not contain Windows-invalid filename characters", name)
 	}
 	return trimmedValue, nil
 }
