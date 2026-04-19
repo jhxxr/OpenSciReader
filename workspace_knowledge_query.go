@@ -140,7 +140,10 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 			continue
 		}
 
-		existingClaim, existingKey := findWorkspaceKnowledgeClaimForCandidate(claimsByID, canonicalID, candidate)
+		existingClaim, existingKey, err := findWorkspaceKnowledgeClaimForCandidate(claimsByID, canonicalID, candidate)
+		if err != nil {
+			return err
+		}
 		if existingKey != "" && existingKey != canonicalID {
 			delete(claimsByID, existingKey)
 			claimsChanged = true
@@ -840,10 +843,12 @@ func canonicalWorkspaceKnowledgeClaimID(candidate WorkspaceKnowledgeCandidate) s
 	return "claim:" + base + "-" + keyHash
 }
 
-func findWorkspaceKnowledgeClaimForCandidate(claimsByID map[string]WorkspaceKnowledgeClaim, canonicalID string, candidate WorkspaceKnowledgeCandidate) (WorkspaceKnowledgeClaim, string) {
+func findWorkspaceKnowledgeClaimForCandidate(claimsByID map[string]WorkspaceKnowledgeClaim, canonicalID string, candidate WorkspaceKnowledgeCandidate) (WorkspaceKnowledgeClaim, string, error) {
 	if claim, ok := claimsByID[canonicalID]; ok {
-		return claim, canonicalID
+		return claim, canonicalID, nil
 	}
+
+	canonicalMatchIDs := make([]string, 0)
 	for existingID, claim := range claimsByID {
 		if canonicalWorkspaceKnowledgeClaimID(WorkspaceKnowledgeCandidate{
 			Title:      claim.Title,
@@ -852,15 +857,31 @@ func findWorkspaceKnowledgeClaimForCandidate(claimsByID map[string]WorkspaceKnow
 			EntityIDs:  claim.EntityIDs,
 			SourceRefs: claim.SourceRefs,
 		}) == canonicalID {
-			return claim, existingID
+			canonicalMatchIDs = append(canonicalMatchIDs, existingID)
 		}
 	}
+	if len(canonicalMatchIDs) > 1 {
+		return WorkspaceKnowledgeClaim{}, "", ambiguousWorkspaceKnowledgeClaimMatchError(canonicalMatchIDs)
+	}
+	if len(canonicalMatchIDs) == 1 {
+		existingID := canonicalMatchIDs[0]
+		return claimsByID[existingID], existingID, nil
+	}
+
+	semanticMatchIDs := make([]string, 0)
 	for existingID, claim := range claimsByID {
 		if workspaceKnowledgeClaimMatchesCandidate(claim, candidate) {
-			return claim, existingID
+			semanticMatchIDs = append(semanticMatchIDs, existingID)
 		}
 	}
-	return WorkspaceKnowledgeClaim{}, ""
+	if len(semanticMatchIDs) > 1 {
+		return WorkspaceKnowledgeClaim{}, "", ambiguousWorkspaceKnowledgeClaimMatchError(semanticMatchIDs)
+	}
+	if len(semanticMatchIDs) == 1 {
+		existingID := semanticMatchIDs[0]
+		return claimsByID[existingID], existingID, nil
+	}
+	return WorkspaceKnowledgeClaim{}, "", nil
 }
 
 func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, canonicalID, workspaceID string, candidate WorkspaceKnowledgeCandidate, now string) (WorkspaceKnowledgeClaim, bool) {
@@ -1074,6 +1095,12 @@ func workspaceKnowledgeStableSourceRefAnchorsCompatible(left, right []WorkspaceK
 		return true
 	}
 	return equalWorkspaceKnowledgeSourceRefAnchors(left, right)
+}
+
+func ambiguousWorkspaceKnowledgeClaimMatchError(ids []string) error {
+	sortedIDs := append([]string(nil), ids...)
+	sort.Strings(sortedIDs)
+	return fmt.Errorf("ambiguous workspace knowledge claim matches: %s", strings.Join(sortedIDs, ", "))
 }
 
 func firstNonZeroFloat(values ...float64) float64 {

@@ -596,6 +596,82 @@ func TestWorkspaceKnowledgePromotePreservesCanonicalIDFromSparseToRichCandidate(
 	}
 }
 
+func TestWorkspaceKnowledgePromoteFailsDeterministicallyForAmbiguousSparseMatch(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout error: %v", err)
+	}
+
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath error: %v", err)
+	}
+	existingClaims := []WorkspaceKnowledgeClaim{
+		{
+			ID:          "claim:contrastive-memory-a",
+			WorkspaceID: "workspace-a",
+			Title:       "Contrastive Memory is the main method",
+			Type:        "claim",
+			Summary:     "The workspace centers on Contrastive Memory",
+			EntityIDs:   []string{"entity:method:contrastive-memory"},
+			SourceRefs: []WorkspaceKnowledgeSourceRef{{
+				SourceID:  "source:paper-a",
+				PageStart: 3,
+				PageEnd:   3,
+				Excerpt:   "Contrastive Memory excerpt A",
+			}},
+			Origin:     "promotion",
+			Status:     "promoted",
+			Confidence: 1,
+			CreatedAt:  "2026-01-01T00:00:00Z",
+			UpdatedAt:  "2026-01-01T00:00:00Z",
+		},
+		{
+			ID:          "claim:contrastive-memory-b",
+			WorkspaceID: "workspace-a",
+			Title:       "Contrastive Memory is the main method",
+			Type:        "claim",
+			Summary:     "The workspace centers on Contrastive Memory",
+			EntityIDs:   []string{"entity:method:contrastive-memory-alt"},
+			SourceRefs: []WorkspaceKnowledgeSourceRef{{
+				SourceID:  "source:paper-b",
+				PageStart: 5,
+				PageEnd:   5,
+				Excerpt:   "Contrastive Memory excerpt B",
+			}},
+			Origin:     "promotion",
+			Status:     "promoted",
+			Confidence: 1,
+			CreatedAt:  "2026-01-02T00:00:00Z",
+			UpdatedAt:  "2026-01-02T00:00:00Z",
+		},
+	}
+	if err := writeWorkspaceKnowledgeJSON(claimsPath, existingClaims); err != nil {
+		t.Fatalf("write claims error: %v", err)
+	}
+
+	service := workspaceKnowledgeQueryService{files: files}
+	err = service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates: []WorkspaceKnowledgeCandidate{{
+			ID:      "candidate:claim:sparse-session-id",
+			Title:   "Contrastive Memory is the main method",
+			Type:    "claim",
+			Summary: "The workspace centers on Contrastive Memory",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("Promote error = %v, want deterministic ambiguity error", err)
+	}
+	if !strings.Contains(err.Error(), "claim:contrastive-memory-a") || !strings.Contains(err.Error(), "claim:contrastive-memory-b") {
+		t.Fatalf("Promote error = %q, want sorted conflicting ids", err)
+	}
+}
+
 func TestWorkspaceKnowledgeQueryIgnoresConversationLogAppendFailure(t *testing.T) {
 	t.Parallel()
 
