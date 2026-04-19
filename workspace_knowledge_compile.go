@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -23,53 +24,76 @@ type workspaceKnowledgeConceptPage struct {
 	SourceTitles []string
 }
 
+type workspaceKnowledgeBySourceRecord struct {
+	CanonicalSlug string
+	Payload       WorkspaceKnowledgeBySourcePayload
+}
+
+type workspaceKnowledgeOutputFile struct {
+	Path    string
+	Content string
+}
+
+type workspaceKnowledgeWikiWritePlan struct {
+	Overview      workspaceKnowledgeOutputFile
+	OpenQuestions workspaceKnowledgeOutputFile
+	Documents     []workspaceKnowledgeOutputFile
+	Concepts      []workspaceKnowledgeOutputFile
+}
+
 func CompileWorkspaceKnowledge(files workspaceKnowledgeFiles, workspaceTitle string) (WorkspaceKnowledgeSnapshot, error) {
 	if err := files.EnsureLayout(); err != nil {
 		return WorkspaceKnowledgeSnapshot{}, err
 	}
 
-	payloads, err := readWorkspaceKnowledgePayloads(files)
+	records, err := readWorkspaceKnowledgeBySourceRecords(files)
 	if err != nil {
 		return WorkspaceKnowledgeSnapshot{}, err
 	}
 
 	snapshot := WorkspaceKnowledgeSnapshot{
-		Sources:   mapSources(payloads),
-		Entities:  mapEntities(payloads),
-		Claims:    mapClaims(payloads),
-		Relations: mapRelations(payloads),
-		Tasks:     mapTasks(payloads),
+		Sources:   mapSources(records),
+		Entities:  mapEntities(records),
+		Claims:    mapClaims(records),
+		Relations: mapRelations(records),
+		Tasks:     mapTasks(records),
 	}
 
 	if err := writeWorkspaceKnowledgeAggregates(files, snapshot); err != nil {
 		return WorkspaceKnowledgeSnapshot{}, err
 	}
-	if err := writeWorkspaceKnowledgeWiki(files, strings.TrimSpace(workspaceTitle), snapshot, payloads); err != nil {
+	if err := writeWorkspaceKnowledgeWiki(files, strings.TrimSpace(workspaceTitle), snapshot, records); err != nil {
 		return WorkspaceKnowledgeSnapshot{}, err
 	}
 
 	return snapshot, nil
 }
 
-func readWorkspaceKnowledgePayloads(files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeBySourcePayload, error) {
+func readWorkspaceKnowledgeBySourceRecords(files workspaceKnowledgeFiles) ([]workspaceKnowledgeBySourceRecord, error) {
 	paths, err := files.BySourcePaths()
 	if err != nil {
 		return nil, err
 	}
 
-	payloads := make([]WorkspaceKnowledgeBySourcePayload, 0, len(paths))
+	records := make([]workspaceKnowledgeBySourceRecord, 0, len(paths))
 	for _, path := range paths {
 		var payload WorkspaceKnowledgeBySourcePayload
 		if err := readWorkspaceKnowledgeJSON(path, &payload); err != nil {
 			return nil, err
 		}
-		payloads = append(payloads, payload)
+		records = append(records, workspaceKnowledgeBySourceRecord{
+			CanonicalSlug: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+			Payload:       payload,
+		})
 	}
 
-	sort.Slice(payloads, func(i, j int) bool {
-		return lessSource(payloads[i].Source, payloads[j].Source)
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CanonicalSlug != records[j].CanonicalSlug {
+			return records[i].CanonicalSlug < records[j].CanonicalSlug
+		}
+		return lessSource(records[i].Payload.Source, records[j].Payload.Source)
 	})
-	return payloads, nil
+	return records, nil
 }
 
 func writeWorkspaceKnowledgeAggregates(files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) error {
@@ -108,12 +132,9 @@ func writeWorkspaceKnowledgeAggregates(files workspaceKnowledgeFiles, snapshot W
 	return nil
 }
 
-func writeWorkspaceKnowledgeWiki(files workspaceKnowledgeFiles, workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, payloads []WorkspaceKnowledgeBySourcePayload) error {
+func writeWorkspaceKnowledgeWiki(files workspaceKnowledgeFiles, workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, records []workspaceKnowledgeBySourceRecord) error {
 	docsDir, err := files.docsDir()
 	if err != nil {
-		return err
-	}
-	if err := clearWorkspaceKnowledgeMarkdownDir(docsDir); err != nil {
 		return err
 	}
 
@@ -121,57 +142,119 @@ func writeWorkspaceKnowledgeWiki(files workspaceKnowledgeFiles, workspaceTitle s
 	if err != nil {
 		return err
 	}
-	if err := clearWorkspaceKnowledgeMarkdownDir(conceptsDir); err != nil {
-		return err
-	}
 
-	overviewPath, err := files.OverviewPath()
+	conceptSlugs := buildConceptSlugs(snapshot.Entities)
+	sourceByID := buildSourceByID(snapshot.Sources)
+	sourceDocSlugs := buildSourceDocSlugs(records)
+	conceptPages := buildConceptPages(snapshot, conceptSlugs, sourceByID)
+	plan, err := buildWorkspaceKnowledgeWikiWritePlan(files, workspaceTitle, snapshot, records, conceptPages, conceptSlugs, sourceByID, sourceDocSlugs)
 	if err != nil {
 		return err
 	}
-	conceptSlugs := buildConceptSlugs(snapshot.Entities)
-	sourceByID := buildSourceByID(snapshot.Sources)
-	conceptPages := buildConceptPages(snapshot, conceptSlugs, sourceByID)
-
-	if err := writeWorkspaceKnowledgeMarkdown(overviewPath, buildOverviewWikiPage(workspaceTitle, snapshot, conceptSlugs)); err != nil {
+	if err := validateWorkspaceKnowledgeWikiWritePlan(plan); err != nil {
 		return err
+	}
+	if err := clearWorkspaceKnowledgeMarkdownDir(docsDir); err != nil {
+		return err
+	}
+	if err := clearWorkspaceKnowledgeMarkdownDir(conceptsDir); err != nil {
+		return err
+	}
+	return writeWorkspaceKnowledgeWikiWritePlan(plan)
+}
+
+func buildWorkspaceKnowledgeWikiWritePlan(files workspaceKnowledgeFiles, workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, records []workspaceKnowledgeBySourceRecord, conceptPages []workspaceKnowledgeConceptPage, conceptSlugs map[string]string, sourceByID map[string]WorkspaceKnowledgeSource, sourceDocSlugs map[string]string) (workspaceKnowledgeWikiWritePlan, error) {
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return workspaceKnowledgeWikiWritePlan{}, err
 	}
 
 	openQuestionsPath, err := files.OpenQuestionsPath()
 	if err != nil {
-		return err
-	}
-	if err := writeWorkspaceKnowledgeMarkdown(openQuestionsPath, buildOpenQuestionsPage(snapshot.Tasks, sourceByID)); err != nil {
-		return err
+		return workspaceKnowledgeWikiWritePlan{}, err
 	}
 
-	for _, payload := range payloads {
-		documentPath, err := files.DocumentWikiPath(workspaceKnowledgeSourceWikiSlug(payload.Source))
+	plan := workspaceKnowledgeWikiWritePlan{
+		Overview: workspaceKnowledgeOutputFile{
+			Path:    overviewPath,
+			Content: buildOverviewWikiPage(workspaceTitle, snapshot, conceptSlugs, sourceDocSlugs),
+		},
+		OpenQuestions: workspaceKnowledgeOutputFile{
+			Path:    openQuestionsPath,
+			Content: buildOpenQuestionsPage(snapshot.Tasks, sourceByID),
+		},
+		Documents: make([]workspaceKnowledgeOutputFile, 0, len(records)),
+		Concepts:  make([]workspaceKnowledgeOutputFile, 0, len(conceptPages)),
+	}
+
+	for _, record := range records {
+		documentPath, err := files.DocumentWikiPath(record.CanonicalSlug)
 		if err != nil {
-			return err
+			return workspaceKnowledgeWikiWritePlan{}, err
 		}
-		if err := writeWorkspaceKnowledgeMarkdown(documentPath, buildDocumentWikiPage(payload, conceptSlugs)); err != nil {
-			return err
-		}
+		plan.Documents = append(plan.Documents, workspaceKnowledgeOutputFile{
+			Path:    documentPath,
+			Content: buildDocumentWikiPage(record.Payload, conceptSlugs),
+		})
 	}
 
 	for _, page := range conceptPages {
 		conceptPath, err := files.ConceptWikiPath(page.Slug)
 		if err != nil {
-			return err
+			return workspaceKnowledgeWikiWritePlan{}, err
 		}
-		if err := writeWorkspaceKnowledgeMarkdown(conceptPath, buildConceptWikiPage(page)); err != nil {
-			return err
+		plan.Concepts = append(plan.Concepts, workspaceKnowledgeOutputFile{
+			Path:    conceptPath,
+			Content: buildConceptWikiPage(page),
+		})
+	}
+
+	return plan, nil
+}
+
+func validateWorkspaceKnowledgeWikiWritePlan(plan workspaceKnowledgeWikiWritePlan) error {
+	seen := map[string]struct{}{}
+	files := []workspaceKnowledgeOutputFile{plan.Overview, plan.OpenQuestions}
+	files = append(files, plan.Documents...)
+	files = append(files, plan.Concepts...)
+
+	for _, file := range files {
+		if _, exists := seen[file.Path]; exists {
+			return fmt.Errorf("duplicate workspace knowledge wiki output path %s", file.Path)
+		}
+		seen[file.Path] = struct{}{}
+
+		info, err := os.Stat(file.Path)
+		if err == nil {
+			if info.IsDir() {
+				return fmt.Errorf("workspace knowledge wiki output path %s is a directory", file.Path)
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat workspace knowledge wiki output path %s: %w", file.Path, err)
 		}
 	}
 
 	return nil
 }
 
-func mapSources(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledgeSource {
-	sources := make([]WorkspaceKnowledgeSource, 0, len(payloads))
-	for _, payload := range payloads {
-		sources = append(sources, payload.Source)
+func writeWorkspaceKnowledgeWikiWritePlan(plan workspaceKnowledgeWikiWritePlan) error {
+	files := []workspaceKnowledgeOutputFile{plan.Overview, plan.OpenQuestions}
+	files = append(files, plan.Documents...)
+	files = append(files, plan.Concepts...)
+	for _, file := range files {
+		if err := writeWorkspaceKnowledgeMarkdown(file.Path, file.Content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mapSources(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeSource {
+	sources := make([]WorkspaceKnowledgeSource, 0, len(records))
+	for _, record := range records {
+		sources = append(sources, record.Payload.Source)
 	}
 	sort.Slice(sources, func(i, j int) bool {
 		return lessSource(sources[i], sources[j])
@@ -179,10 +262,10 @@ func mapSources(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowled
 	return sources
 }
 
-func mapEntities(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledgeEntity {
+func mapEntities(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeEntity {
 	entities := make([]WorkspaceKnowledgeEntity, 0)
-	for _, payload := range payloads {
-		entities = append(entities, payload.Entities...)
+	for _, record := range records {
+		entities = append(entities, record.Payload.Entities...)
 	}
 	sort.Slice(entities, func(i, j int) bool {
 		return lessEntity(entities[i], entities[j])
@@ -190,10 +273,10 @@ func mapEntities(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowle
 	return entities
 }
 
-func mapClaims(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledgeClaim {
+func mapClaims(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeClaim {
 	claims := make([]WorkspaceKnowledgeClaim, 0)
-	for _, payload := range payloads {
-		claims = append(claims, payload.Claims...)
+	for _, record := range records {
+		claims = append(claims, record.Payload.Claims...)
 	}
 	sort.Slice(claims, func(i, j int) bool {
 		return lessClaim(claims[i], claims[j])
@@ -201,10 +284,10 @@ func mapClaims(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledg
 	return claims
 }
 
-func mapRelations(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledgeRelation {
+func mapRelations(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeRelation {
 	relations := make([]WorkspaceKnowledgeRelation, 0)
-	for _, payload := range payloads {
-		relations = append(relations, payload.Relations...)
+	for _, record := range records {
+		relations = append(relations, record.Payload.Relations...)
 	}
 	sort.Slice(relations, func(i, j int) bool {
 		return lessRelation(relations[i], relations[j])
@@ -212,10 +295,10 @@ func mapRelations(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowl
 	return relations
 }
 
-func mapTasks(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledgeTask {
+func mapTasks(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeTask {
 	tasks := make([]WorkspaceKnowledgeTask, 0)
-	for _, payload := range payloads {
-		tasks = append(tasks, payload.Tasks...)
+	for _, record := range records {
+		tasks = append(tasks, record.Payload.Tasks...)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		return lessTask(tasks[i], tasks[j])
@@ -223,7 +306,7 @@ func mapTasks(payloads []WorkspaceKnowledgeBySourcePayload) []WorkspaceKnowledge
 	return tasks
 }
 
-func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, conceptSlugs map[string]string) string {
+func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, conceptSlugs map[string]string, sourceDocSlugs map[string]string) string {
 	title := firstNonEmptyText(strings.TrimSpace(workspaceTitle), "Workspace Knowledge")
 
 	var builder strings.Builder
@@ -250,7 +333,7 @@ func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSna
 			builder.WriteString("- [")
 			builder.WriteString(firstNonEmptyText(source.Title, source.Slug, source.ID))
 			builder.WriteString("](docs/")
-			builder.WriteString(workspaceKnowledgeSourceWikiSlug(source))
+			builder.WriteString(firstNonEmptyText(sourceDocSlugs[source.ID], workspaceKnowledgeSourceWikiSlug(source)))
 			builder.WriteString(".md)\n")
 		}
 	}
@@ -297,10 +380,10 @@ func buildOpenQuestionsPage(tasks []WorkspaceKnowledgeTask, sourceByID map[strin
 			builder.WriteString(strings.TrimSpace(task.Summary))
 		}
 
-		sourceTitles := collectSourceTitles(task.SourceRefs, sourceByID)
-		if len(sourceTitles) > 0 {
+		sourceLabels := collectSourceLabels(task.SourceRefs, sourceByID)
+		if len(sourceLabels) > 0 {
 			builder.WriteString(" (Sources: ")
-			builder.WriteString(strings.Join(sourceTitles, ", "))
+			builder.WriteString(strings.Join(sourceLabels, ", "))
 			builder.WriteString(")")
 		}
 		builder.WriteString("\n")
@@ -441,7 +524,7 @@ func buildConceptPages(snapshot WorkspaceKnowledgeSnapshot, conceptSlugs map[str
 			Slug:         conceptSlugs[entity.ID],
 			Entity:       entity,
 			Claims:       claims,
-			SourceTitles: collectSourceTitles(entity.SourceRefs, sourceByID),
+			SourceTitles: collectSourceLabels(entity.SourceRefs, sourceByID),
 		})
 	}
 
@@ -477,6 +560,14 @@ func buildSourceByID(sources []WorkspaceKnowledgeSource) map[string]WorkspaceKno
 	return sourceByID
 }
 
+func buildSourceDocSlugs(records []workspaceKnowledgeBySourceRecord) map[string]string {
+	sourceDocSlugs := make(map[string]string, len(records))
+	for _, record := range records {
+		sourceDocSlugs[record.Payload.Source.ID] = record.CanonicalSlug
+	}
+	return sourceDocSlugs
+}
+
 func renderConceptClaims(claims []WorkspaceKnowledgeClaim) string {
 	if len(claims) == 0 {
 		return "None.\n"
@@ -495,27 +586,52 @@ func renderConceptClaims(claims []WorkspaceKnowledgeClaim) string {
 	return builder.String()
 }
 
-func collectSourceTitles(refs []WorkspaceKnowledgeSourceRef, sourceByID map[string]WorkspaceKnowledgeSource) []string {
+func collectSourceLabels(refs []WorkspaceKnowledgeSourceRef, sourceByID map[string]WorkspaceKnowledgeSource) []string {
 	if len(refs) == 0 {
 		return []string{}
 	}
 
+	type sourceLabel struct {
+		SourceID string
+		Title    string
+		Label    string
+	}
+
 	seen := make(map[string]struct{}, len(refs))
-	titles := make([]string, 0, len(refs))
+	labels := make([]sourceLabel, 0, len(refs))
 	for _, ref := range refs {
 		source, ok := sourceByID[ref.SourceID]
 		if !ok {
 			continue
 		}
-		title := firstNonEmptyText(source.Title, source.Slug, source.ID)
-		if _, exists := seen[title]; exists {
+		if _, exists := seen[source.ID]; exists {
 			continue
 		}
-		seen[title] = struct{}{}
-		titles = append(titles, title)
+		seen[source.ID] = struct{}{}
+
+		title := firstNonEmptyText(source.Title, source.Slug, source.ID)
+		label := fmt.Sprintf("%s (`%s`)", title, source.ID)
+		if title == source.ID {
+			label = fmt.Sprintf("`%s`", source.ID)
+		}
+		labels = append(labels, sourceLabel{
+			SourceID: source.ID,
+			Title:    title,
+			Label:    label,
+		})
 	}
-	sort.Strings(titles)
-	return titles
+	sort.Slice(labels, func(i, j int) bool {
+		if labels[i].Title != labels[j].Title {
+			return labels[i].Title < labels[j].Title
+		}
+		return labels[i].SourceID < labels[j].SourceID
+	})
+
+	result := make([]string, 0, len(labels))
+	for _, label := range labels {
+		result = append(result, label.Label)
+	}
+	return result
 }
 
 func clearWorkspaceKnowledgeMarkdownDir(dir string) error {

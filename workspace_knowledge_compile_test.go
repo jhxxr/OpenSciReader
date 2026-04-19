@@ -18,6 +18,16 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		t.Fatalf("EnsureLayout error: %v", err)
 	}
 
+	workspaceDir := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
+	staleDocPath := filepath.Join(workspaceDir, "wiki", "docs", "stale.md")
+	staleConceptPath := filepath.Join(workspaceDir, "wiki", "concepts", "stale.md")
+	if err := os.WriteFile(staleDocPath, []byte("stale doc"), 0o600); err != nil {
+		t.Fatalf("write stale doc error: %v", err)
+	}
+	if err := os.WriteFile(staleConceptPath, []byte("stale concept"), 0o600); err != nil {
+		t.Fatalf("write stale concept error: %v", err)
+	}
+
 	now := nowRFC3339()
 	payloadA := WorkspaceKnowledgeBySourcePayload{
 		Source: WorkspaceKnowledgeSource{ID: "source:paper-a", WorkspaceID: "workspace-a", Title: "Paper A", Slug: "paper-a", Kind: "pdf"},
@@ -61,7 +71,7 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		}},
 	}
 	payloadB := WorkspaceKnowledgeBySourcePayload{
-		Source: WorkspaceKnowledgeSource{ID: "source:paper-b", WorkspaceID: "workspace-a", Title: "Paper B", Slug: "", Kind: "markdown"},
+		Source: WorkspaceKnowledgeSource{ID: "source:paper-b", WorkspaceID: "workspace-a", Title: "Paper B", Slug: "paper-b-metadata", Kind: "markdown"},
 		Tasks: []WorkspaceKnowledgeTask{{
 			ID:          "task:compare-paper-a-paper-b",
 			WorkspaceID: "workspace-a",
@@ -86,7 +96,7 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 	if err := files.WriteBySource("paper-a", payloadA); err != nil {
 		t.Fatalf("WriteBySource paper-a error: %v", err)
 	}
-	if err := files.WriteBySource("paper-b", payloadB); err != nil {
+	if err := files.WriteBySource("paper-b-canonical", payloadB); err != nil {
 		t.Fatalf("WriteBySource paper-b error: %v", err)
 	}
 
@@ -108,7 +118,6 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		t.Fatalf("relations = %d, want 0", len(snapshot.Relations))
 	}
 
-	workspaceDir := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
 	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "entities.json"), 1)
 	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "claims.json"), 1)
 	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "relations.json"), 0)
@@ -120,6 +129,9 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 	}
 	if !strings.Contains(string(overview), "Knowledge Workspace") {
 		t.Fatalf("overview.md = %q, want workspace title", string(overview))
+	}
+	if !strings.Contains(string(overview), "docs/paper-b-canonical.md") {
+		t.Fatalf("overview.md = %q, want canonical doc link", string(overview))
 	}
 
 	openQuestions, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "open-questions.md"))
@@ -138,12 +150,21 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		t.Fatalf("paper-a document page = %q, want source title", string(documentPageA))
 	}
 
-	documentPageB, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "docs", "source-paper-b.md"))
+	documentPageB, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "docs", "paper-b-canonical.md"))
 	if err != nil {
-		t.Fatalf("read source-paper-b document page error: %v", err)
+		t.Fatalf("read paper-b-canonical document page error: %v", err)
 	}
 	if !strings.Contains(string(documentPageB), "Paper B") {
-		t.Fatalf("source-paper-b document page = %q, want source title", string(documentPageB))
+		t.Fatalf("paper-b-canonical document page = %q, want source title", string(documentPageB))
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "wiki", "docs", "paper-b-metadata.md")); !os.IsNotExist(err) {
+		t.Fatalf("paper-b-metadata.md stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(staleDocPath); !os.IsNotExist(err) {
+		t.Fatalf("stale doc stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(staleConceptPath); !os.IsNotExist(err) {
+		t.Fatalf("stale concept stat err = %v, want not exist", err)
 	}
 
 	conceptPage, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "concepts", "contrastive-memory.md"))
@@ -152,6 +173,170 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 	}
 	if !strings.Contains(string(conceptPage), "Contrastive Memory") {
 		t.Fatalf("concept page = %q, want concept title", string(conceptPage))
+	}
+}
+
+func TestCompileWorkspaceKnowledgePreservesExistingWikiOnTargetValidationError(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout error: %v", err)
+	}
+
+	now := nowRFC3339()
+	payload := WorkspaceKnowledgeBySourcePayload{
+		Source: WorkspaceKnowledgeSource{
+			ID:          "source:paper-a",
+			WorkspaceID: "workspace-a",
+			Title:       "Paper A",
+			Slug:        "paper-a",
+			Kind:        "pdf",
+		},
+		Entities: []WorkspaceKnowledgeEntity{{
+			ID:          "entity:method:contrastive-memory",
+			WorkspaceID: "workspace-a",
+			Title:       "Contrastive Memory",
+			Type:        "method",
+			Summary:     "Shared method summary",
+			SourceRefs: []WorkspaceKnowledgeSourceRef{{
+				SourceID:  "source:paper-a",
+				PageStart: 1,
+				PageEnd:   1,
+				Excerpt:   "Excerpt",
+			}},
+			Origin:     "scan",
+			Status:     "confirmed",
+			Confidence: 0.9,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}},
+	}
+
+	if err := files.WriteBySource("paper-a", payload); err != nil {
+		t.Fatalf("WriteBySource error: %v", err)
+	}
+
+	workspaceDir := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
+	staleDocPath := filepath.Join(workspaceDir, "wiki", "docs", "stale.md")
+	staleConceptPath := filepath.Join(workspaceDir, "wiki", "concepts", "stale.md")
+	if err := os.WriteFile(staleDocPath, []byte("stale doc"), 0o600); err != nil {
+		t.Fatalf("write stale doc error: %v", err)
+	}
+	if err := os.WriteFile(staleConceptPath, []byte("stale concept"), 0o600); err != nil {
+		t.Fatalf("write stale concept error: %v", err)
+	}
+
+	blockingDocPath := filepath.Join(workspaceDir, "wiki", "docs", "paper-a.md")
+	if err := os.Mkdir(blockingDocPath, 0o700); err != nil {
+		t.Fatalf("create blocking doc directory error: %v", err)
+	}
+
+	if _, err := CompileWorkspaceKnowledge(files, "Knowledge Workspace"); err == nil {
+		t.Fatal("CompileWorkspaceKnowledge expected error")
+	}
+
+	if _, err := os.Stat(staleDocPath); err != nil {
+		t.Fatalf("stale doc stat error: %v", err)
+	}
+	if _, err := os.Stat(staleConceptPath); err != nil {
+		t.Fatalf("stale concept stat error: %v", err)
+	}
+}
+
+func TestCompileWorkspaceKnowledgePreservesSourceProvenanceForDuplicateTitles(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	paths := newWorkspaceKnowledgeTestPaths(tempDir)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout error: %v", err)
+	}
+
+	now := nowRFC3339()
+	payloadA := WorkspaceKnowledgeBySourcePayload{
+		Source: WorkspaceKnowledgeSource{
+			ID:          "source:alpha",
+			WorkspaceID: "workspace-a",
+			Title:       "Shared Title",
+			Slug:        "alpha",
+			Kind:        "pdf",
+		},
+		Entities: []WorkspaceKnowledgeEntity{{
+			ID:          "entity:concept:shared",
+			WorkspaceID: "workspace-a",
+			Title:       "Shared Concept",
+			Type:        "concept",
+			Summary:     "Summary",
+			SourceRefs: []WorkspaceKnowledgeSourceRef{
+				{SourceID: "source:beta", PageStart: 2, PageEnd: 2, Excerpt: "beta excerpt"},
+				{SourceID: "source:alpha", PageStart: 1, PageEnd: 1, Excerpt: "alpha excerpt"},
+			},
+			Origin:     "scan",
+			Status:     "confirmed",
+			Confidence: 0.9,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}},
+		Tasks: []WorkspaceKnowledgeTask{{
+			ID:          "task:compare-sources",
+			WorkspaceID: "workspace-a",
+			Title:       "Compare duplicate titles",
+			Type:        "open_question",
+			Summary:     "Check provenance labels",
+			Priority:    "high",
+			SourceRefs: []WorkspaceKnowledgeSourceRef{
+				{SourceID: "source:beta", PageStart: 4, PageEnd: 4, Excerpt: "beta task"},
+				{SourceID: "source:alpha", PageStart: 3, PageEnd: 3, Excerpt: "alpha task"},
+			},
+			Origin:     "scan",
+			Status:     "candidate",
+			Confidence: 0.7,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}},
+	}
+	payloadB := WorkspaceKnowledgeBySourcePayload{
+		Source: WorkspaceKnowledgeSource{
+			ID:          "source:beta",
+			WorkspaceID: "workspace-a",
+			Title:       "Shared Title",
+			Slug:        "beta",
+			Kind:        "markdown",
+		},
+	}
+
+	if err := files.WriteBySource("beta", payloadB); err != nil {
+		t.Fatalf("WriteBySource beta error: %v", err)
+	}
+	if err := files.WriteBySource("alpha", payloadA); err != nil {
+		t.Fatalf("WriteBySource alpha error: %v", err)
+	}
+
+	if _, err := CompileWorkspaceKnowledge(files, "Knowledge Workspace"); err != nil {
+		t.Fatalf("CompileWorkspaceKnowledge error: %v", err)
+	}
+
+	workspaceDir := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
+	expectedSources := "Shared Title (`source:alpha`), Shared Title (`source:beta`)"
+
+	conceptPage, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "concepts", "shared-concept.md"))
+	if err != nil {
+		t.Fatalf("read concept page error: %v", err)
+	}
+	if !strings.Contains(string(conceptPage), expectedSources) {
+		t.Fatalf("concept page = %q, want sources %q", string(conceptPage), expectedSources)
+	}
+
+	openQuestions, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "open-questions.md"))
+	if err != nil {
+		t.Fatalf("read open-questions.md error: %v", err)
+	}
+	if !strings.Contains(string(openQuestions), expectedSources) {
+		t.Fatalf("open-questions.md = %q, want sources %q", string(openQuestions), expectedSources)
 	}
 }
 
