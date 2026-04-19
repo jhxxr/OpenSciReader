@@ -26,6 +26,7 @@ import { useWorkspaceStore } from './store/workspaceStore';
 import { useZoteroStore } from './store/zoteroStore';
 import {
   PROVIDER_BASE_URL_HINTS,
+  DEFAULT_AI_WORKSPACE_CONFIG,
   type DiscoveredModel,
   type ModelRecord,
   type ModelUpsertInput,
@@ -138,19 +139,21 @@ export default function App() {
   const [runtimeImportPath, setRuntimeImportPath] = useState('');
   const [runtimeImportProgress, setRuntimeImportProgress] = useState<PDFTranslateRuntimeImportProgress | null>(null);
   const [workspaceTabDocuments, setWorkspaceTabDocuments] = useState<Record<string, { documents: import('./types/workspace').DocumentRecord[]; isLoading: boolean; deletingDocumentId: string | null }>>({});
-  const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
-    pages: WorkspaceWikiPage[];
-    selectedPageId: string | null;
-    pageContent: WorkspaceWikiPageContent | null;
-    isLoadingPages: boolean;
-    isLoadingPageContent: boolean;
-    activeJob: WorkspaceWikiScanJob | null;
-    wikiError: string | null;
-    isStarting: boolean;
-    isCancelling: boolean;
-    isDeleting: boolean;
-    unsubscribe?: (() => void) | null;
-  }>>({});
+const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
+  pages: WorkspaceWikiPage[];
+  selectedPageId: string | null;
+  pageContent: WorkspaceWikiPageContent | null;
+  isLoadingPages: boolean;
+  isLoadingPageContent: boolean;
+  activeJob: WorkspaceWikiScanJob | null;
+  wikiError: string | null;
+  isStarting: boolean;
+  isCancelling: boolean;
+  isDeleting: boolean;
+  unsubscribe?: (() => void) | null;
+  wikiScanProviderId: number;
+  wikiScanModelId: number;
+}>>({});
 
   useEffect(() => {
     void loadConfig();
@@ -265,6 +268,8 @@ export default function App() {
         isCancelling: current[workspaceId]?.isCancelling ?? false,
         isDeleting: current[workspaceId]?.isDeleting ?? false,
         unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+        wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
+        wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
       },
     }));
     try {
@@ -274,6 +279,15 @@ export default function App() {
       ]);
       const activeJob = jobs.find((job) => job.workspaceId === workspaceId && (job.status === 'queued' || job.status === 'running')) ?? null;
       const selectedPageId = currentSelectedPageId(workspaceId, pages, workspaceTabWiki);
+      
+      let wikiScanProviderId = 0;
+      let wikiScanModelId = 0;
+      try {
+        const config = await configApi.getAIWorkspaceConfig(workspaceId);
+        wikiScanProviderId = config.wikiScanProviderId ?? 0;
+        wikiScanModelId = config.wikiScanModelId ?? 0;
+      } catch { /* use defaults */ }
+      
       setWorkspaceTabWiki((current) => ({
         ...current,
         [workspaceId]: {
@@ -288,6 +302,8 @@ export default function App() {
           isCancelling: current[workspaceId]?.isCancelling ?? false,
           isDeleting: current[workspaceId]?.isDeleting ?? false,
           unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+          wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? wikiScanProviderId,
+          wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? wikiScanModelId,
         },
       }));
       if (selectedPageId) {
@@ -300,14 +316,16 @@ export default function App() {
             pageContent: content,
             isLoadingPages: false,
             isLoadingPageContent: false,
-            activeJob: current[workspaceId]?.activeJob ?? activeJob,
-            wikiError: null,
-            isStarting: current[workspaceId]?.isStarting ?? false,
-            isCancelling: current[workspaceId]?.isCancelling ?? false,
-            isDeleting: current[workspaceId]?.isDeleting ?? false,
-            unsubscribe: current[workspaceId]?.unsubscribe ?? null,
-          },
-        }));
+          activeJob: current[workspaceId]?.activeJob ?? activeJob,
+          wikiError: null,
+          isStarting: current[workspaceId]?.isStarting ?? false,
+          isCancelling: current[workspaceId]?.isCancelling ?? false,
+          isDeleting: current[workspaceId]?.isDeleting ?? false,
+          unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+          wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
+          wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
+        },
+      }));
       }
     } catch (error) {
       setWorkspaceTabWiki((current) => ({
@@ -324,10 +342,30 @@ export default function App() {
           isCancelling: current[workspaceId]?.isCancelling ?? false,
           isDeleting: current[workspaceId]?.isDeleting ?? false,
           unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+          wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
+          wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
         },
       }));
     }
   }, [workspaceTabWiki]);
+
+  const handleChangeWikiScanModel = useCallback((workspaceId: string, providerId: number, modelId: number) => {
+    setWorkspaceTabWiki((current) => ({
+      ...current,
+      [workspaceId]: {
+        ...current[workspaceId],
+        wikiScanProviderId: providerId,
+        wikiScanModelId: modelId,
+      },
+    }));
+    void configApi.saveAIWorkspaceConfig(workspaceId, {
+      ...DEFAULT_AI_WORKSPACE_CONFIG,
+      wikiScanProviderId: providerId,
+      wikiScanModelId: modelId,
+    }).catch((error) => {
+      console.error('Failed to save wiki scan model config:', error);
+    });
+  }, []);
 
   const handleOpenPdfTab = useCallback(
     (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => {
@@ -688,6 +726,8 @@ export default function App() {
                   isStartingWikiScan={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isStarting ?? false : false}
                   isCancellingWikiScan={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isCancelling ?? false : false}
                   isDeletingWikiPages={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isDeleting ?? false : false}
+                  wikiScanProviderId={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.wikiScanProviderId ?? 0 : 0}
+                  wikiScanModelId={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.wikiScanModelId ?? 0 : 0}
                   onImportFiles={async () => {
                     if (!tab.workspaceId) {
                       return;
@@ -737,13 +777,11 @@ export default function App() {
                       },
                     }));
                   }}
-                  onStartWikiScan={async () => {
+                  onStartWikiScan={async (providerId: number, modelId: number) => {
                     if (!tab.workspaceId) {
                       return;
                     }
-                    const provider = llmProviderConfigs.find((item) => item.models.length > 0);
-                    const model = provider?.models[0];
-                    if (!provider || !model) {
+                    if (!providerId || !modelId) {
                       setWorkspaceTabWiki((current) => ({
                         ...current,
                         [tab.workspaceId!]: {
@@ -753,11 +791,13 @@ export default function App() {
                           isLoadingPages: false,
                           isLoadingPageContent: false,
                           activeJob: current[tab.workspaceId!]?.activeJob ?? null,
-                          wikiError: '请先配置 LLM provider 和 model',
+                          wikiError: '请先为当前工作区选择扫描模型',
                           isStarting: false,
                           isCancelling: false,
                           isDeleting: false,
                           unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
+                          wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                          wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
                         },
                       }));
                       return;
@@ -776,9 +816,11 @@ export default function App() {
                         isCancelling: current[tab.workspaceId!]?.isCancelling ?? false,
                         isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
                         unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
+                        wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                        wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
                       },
                     }));
-                    const job = await workspaceWikiApi.start({ workspaceId: tab.workspaceId, providerId: provider.provider.id, modelId: model.id });
+                    const job = await workspaceWikiApi.start({ workspaceId: tab.workspaceId, providerId, modelId });
                     const unsubscribe = workspaceWikiApi.subscribe(job.jobId, (event) => {
                       setWorkspaceTabWiki((current) => ({
                         ...current,
@@ -794,6 +836,8 @@ export default function App() {
                           isCancelling: false,
                           isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
                           unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? unsubscribe,
+                          wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                          wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
                         },
                       }));
                       if (event.status.status === 'completed' || event.status.status === 'failed' || event.status.status === 'cancelled') {
@@ -815,6 +859,8 @@ export default function App() {
                         isCancelling: false,
                         isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
                         unsubscribe,
+                        wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                        wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
                       },
                     }));
                   }}
@@ -898,6 +944,11 @@ export default function App() {
                         isDeleting: false,
                       },
                     }));
+                  }}
+                  onChangeWikiScanModel={(providerId: number, modelId: number) => {
+                    if (tab.workspaceId) {
+                      handleChangeWikiScanModel(tab.workspaceId, providerId, modelId);
+                    }
                   }}
                 />
               ) : (
