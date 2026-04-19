@@ -176,6 +176,8 @@ type AIWorkspaceConfig struct {
 	DrawingPromptDraft   string `json:"drawingPromptDraft"`
 	DrawingProviderID    int64  `json:"drawingProviderId"`
 	DrawingModel         string `json:"drawingModel"`
+	WikiScanProviderID   int64  `json:"wikiScanProviderId"`
+	WikiScanModelID      int64  `json:"wikiScanModelId"`
 }
 
 type WorkspaceKnowledgeEvidenceHit struct {

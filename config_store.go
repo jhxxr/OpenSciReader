@@ -1631,6 +1631,8 @@ func defaultAIWorkspaceConfig() AIWorkspaceConfig {
 		DrawingPromptDraft:  "根据当前论文内容，生成一张适合组会汇报的科研概念图，突出问题、方法流程、关键结果和应用价值。",
 		DrawingProviderID:   0,
 		DrawingModel:        "gemini-3-pro-image-preview",
+		WikiScanProviderID:  0,
+		WikiScanModelID:     0,
 	}
 }
 
@@ -1671,6 +1673,12 @@ func normalizeAIWorkspaceConfig(input AIWorkspaceConfig) AIWorkspaceConfig {
 	}
 	if trimmed := strings.TrimSpace(input.DrawingModel); trimmed != "" {
 		config.DrawingModel = trimmed
+	}
+	if input.WikiScanProviderID > 0 {
+		config.WikiScanProviderID = input.WikiScanProviderID
+	}
+	if input.WikiScanModelID > 0 {
+		config.WikiScanModelID = input.WikiScanModelID
 	}
 
 	return config
