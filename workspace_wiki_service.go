@@ -89,6 +89,12 @@ type workspaceKnowledgeScanCandidate struct {
 	contentHash  string
 }
 
+const (
+	defaultWorkspaceKnowledgePromptSourceChars = 12000
+	minWorkspaceKnowledgePromptSourceChars     = 8000
+	maxWorkspaceKnowledgePromptSourceChars     = 48000
+)
+
 func (r *workspaceWikiScanRunner) run(ctx context.Context, job WorkspaceWikiScanJob) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -127,6 +133,15 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(job.DocumentID) != "" && len(sources) == 0 {
+		return fmt.Errorf("no scan sources found for document %s", strings.TrimSpace(job.DocumentID))
+	}
+
+	manifest, err := r.loadSourceManifest(files)
+	if err != nil {
+		return err
+	}
+	existingByID := workspaceKnowledgeSourcesByID(manifest)
 
 	fullScan := strings.TrimSpace(job.DocumentID) == ""
 	if fullScan {
@@ -135,23 +150,28 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		}
 	}
 
-	manifest, err := r.loadSourceManifest(files, fullScan)
-	if err != nil {
-		return err
-	}
-
 	failureCount := 0
+	skippedCount := 0
 	sourceIDs := make([]string, 0, len(sources))
 	for index := range sources {
 		sourceIDs = append(sourceIDs, sources[index].ID)
+		existingSource, hasExistingSource := existingByID[sources[index].ID]
+		if hasExistingSource {
+			skip, err := r.shouldSkipSource(files, sources[index], existingSource)
+			if err != nil {
+				return err
+			}
+			if skip {
+				skippedCount++
+				sources[index] = mergeSkippedWorkspaceKnowledgeSource(existingSource, sources[index])
+				continue
+			}
+		}
 		if err := r.processSource(ctx, workspace, job, files, &sources[index]); err != nil {
 			failureCount++
 			sources[index].Status = "error"
 			sources[index].LastError = err.Error()
 			sources[index].LastScanAt = nowRFC3339()
-			if removeErr := r.removeBySourceArtifact(files, sources[index].Slug); removeErr != nil {
-				return removeErr
-			}
 		}
 	}
 
@@ -171,7 +191,7 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		StartedAt:   firstNonEmptyText(strings.TrimSpace(job.StartedAt), nowRFC3339()),
 		FinishedAt:  nowRFC3339(),
 		SourceIDs:   sourceIDs,
-		Message:     workspaceKnowledgeScanMessage(len(sources), failureCount),
+		Message:     workspaceKnowledgeScanMessage(len(sources), failureCount, skippedCount),
 	})
 }
 
@@ -276,16 +296,14 @@ func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace 
 func (r *workspaceWikiScanRunner) processSource(ctx context.Context, workspace Workspace, job WorkspaceWikiScanJob, files workspaceKnowledgeFiles, source *WorkspaceKnowledgeSource) error {
 	markdown, err := r.extractSourceMarkdown(ctx, *source)
 	if err != nil {
-		if removeErr := removeWorkspaceKnowledgeFile(source.ExtractPath); removeErr != nil {
-			return removeErr
-		}
 		return err
 	}
 	if err := writeWorkspaceKnowledgeMarkdown(source.ExtractPath, markdown); err != nil {
 		return err
 	}
 
-	prompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, *source, markdown)
+	promptSourceMarkdown := trimWorkspaceKnowledgePromptMarkdown(markdown, r.workspaceKnowledgePromptMarkdownLimit(ctx, job.ModelID))
+	prompt := buildWorkspaceKnowledgeBySourcePrompt(workspace, *source, promptSourceMarkdown)
 	payload, err := r.knowledgeLLM.GenerateWorkspaceKnowledgeBySource(ctx, job.ProviderID, job.ModelID, prompt)
 	if err != nil {
 		return fmt.Errorf("generate by-source knowledge for %s: %w", source.Title, err)
@@ -329,10 +347,7 @@ func (r *workspaceWikiScanRunner) extractSourceMarkdown(ctx context.Context, sou
 	}
 }
 
-func (r *workspaceWikiScanRunner) loadSourceManifest(files workspaceKnowledgeFiles, fullScan bool) ([]WorkspaceKnowledgeSource, error) {
-	if fullScan {
-		return []WorkspaceKnowledgeSource{}, nil
-	}
+func (r *workspaceWikiScanRunner) loadSourceManifest(files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeSource, error) {
 	return files.ReadSources()
 }
 
@@ -357,14 +372,6 @@ func (r *workspaceWikiScanRunner) removeStaleSourceArtifacts(files workspaceKnow
 	return removeWorkspaceKnowledgeArtifactsNotInSet(bySourceDir, ".json", currentSlugs)
 }
 
-func (r *workspaceWikiScanRunner) removeBySourceArtifact(files workspaceKnowledgeFiles, sourceSlug string) error {
-	path, err := files.BySourcePath(sourceSlug)
-	if err != nil {
-		return err
-	}
-	return removeWorkspaceKnowledgeFile(path)
-}
-
 func (r *workspaceWikiScanRunner) saveJob(ctx context.Context, job WorkspaceWikiScanJob, status WorkspaceWikiScanJobStatus, stage, message string, finished bool) WorkspaceWikiScanJob {
 	if r.store == nil {
 		return job
@@ -384,6 +391,51 @@ func (r *workspaceWikiScanRunner) saveJob(ctx context.Context, job WorkspaceWiki
 		return job
 	}
 	return saved
+}
+
+func (r *workspaceWikiScanRunner) shouldSkipSource(files workspaceKnowledgeFiles, currentSource, existingSource WorkspaceKnowledgeSource) (bool, error) {
+	if existingSource.ID == "" {
+		return false, nil
+	}
+	if existingSource.ContentHash != currentSource.ContentHash {
+		return false, nil
+	}
+	if existingSource.Status != "ready" {
+		return false, nil
+	}
+	if !workspaceKnowledgeFileExists(firstNonEmptyText(currentSource.ExtractPath, existingSource.ExtractPath)) {
+		return false, nil
+	}
+
+	bySourcePath, err := files.BySourcePath(currentSource.Slug)
+	if err != nil {
+		return false, err
+	}
+	if !workspaceKnowledgeFileExists(bySourcePath) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (r *workspaceWikiScanRunner) workspaceKnowledgePromptMarkdownLimit(ctx context.Context, modelID int64) int {
+	limit := defaultWorkspaceKnowledgePromptSourceChars
+	if r.store == nil || modelID <= 0 {
+		return limit
+	}
+
+	model, err := r.store.GetModel(ctx, modelID)
+	if err != nil || model.ContextWindow <= 0 {
+		return limit
+	}
+
+	limit = (model.ContextWindow / 3) * 4
+	if limit < minWorkspaceKnowledgePromptSourceChars {
+		return minWorkspaceKnowledgePromptSourceChars
+	}
+	if limit > maxWorkspaceKnowledgePromptSourceChars {
+		return maxWorkspaceKnowledgePromptSourceChars
+	}
+	return limit
 }
 
 func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job WorkspaceWikiScanJob, runErr error) error {
@@ -429,6 +481,26 @@ func mergeWorkspaceKnowledgeSources(existing, updated []WorkspaceKnowledgeSource
 		return lessSource(merged[i], merged[j])
 	})
 	return merged
+}
+
+func workspaceKnowledgeSourcesByID(sources []WorkspaceKnowledgeSource) map[string]WorkspaceKnowledgeSource {
+	byID := make(map[string]WorkspaceKnowledgeSource, len(sources))
+	for _, source := range sources {
+		byID[source.ID] = source
+	}
+	return byID
+}
+
+func mergeSkippedWorkspaceKnowledgeSource(existingSource, currentSource WorkspaceKnowledgeSource) WorkspaceKnowledgeSource {
+	existingSource.WorkspaceID = currentSource.WorkspaceID
+	existingSource.Title = currentSource.Title
+	existingSource.Slug = currentSource.Slug
+	existingSource.Kind = currentSource.Kind
+	existingSource.AbsolutePath = currentSource.AbsolutePath
+	existingSource.ContentHash = currentSource.ContentHash
+	existingSource.ExtractPath = currentSource.ExtractPath
+	existingSource.DocumentID = currentSource.DocumentID
+	return existingSource
 }
 
 func normalizeWorkspaceKnowledgeBySourcePayload(source WorkspaceKnowledgeSource, payload WorkspaceKnowledgeBySourcePayload) WorkspaceKnowledgeBySourcePayload {
@@ -537,11 +609,58 @@ func normalizeWorkspaceKnowledgeAbsolutePath(path string) string {
 	return strings.ToLower(filepath.Clean(trimmed))
 }
 
-func workspaceKnowledgeScanMessage(totalSources, failedSources int) string {
-	if failedSources <= 0 {
-		return fmt.Sprintf("processed %d sources", totalSources)
+func trimWorkspaceKnowledgePromptMarkdown(markdown string, maxChars int) string {
+	trimmedMarkdown := strings.TrimSpace(markdown)
+	if trimmedMarkdown == "" {
+		return ""
 	}
-	return fmt.Sprintf("processed %d sources (%d failed)", totalSources, failedSources)
+	if maxChars <= 0 {
+		maxChars = defaultWorkspaceKnowledgePromptSourceChars
+	}
+
+	runes := []rune(trimmedMarkdown)
+	if len(runes) <= maxChars {
+		return trimmedMarkdown
+	}
+
+	headCount := (maxChars * 3) / 4
+	if headCount <= 0 {
+		headCount = maxChars / 2
+	}
+	if headCount <= 0 {
+		headCount = 1
+	}
+	tailCount := maxChars - headCount
+	if tailCount <= 0 {
+		tailCount = 1
+		if headCount > 1 {
+			headCount = maxChars - tailCount
+		}
+	}
+
+	omittedCount := len(runes) - (headCount + tailCount)
+	if omittedCount <= 0 {
+		return string(runes[:maxChars])
+	}
+
+	return string(runes[:headCount]) +
+		fmt.Sprintf("\n\n[... trimmed %d characters for scan prompt ...]\n\n", omittedCount) +
+		string(runes[len(runes)-tailCount:])
+}
+
+func workspaceKnowledgeScanMessage(totalSources, failedSources, skippedSources int) string {
+	message := fmt.Sprintf("processed %d sources", totalSources)
+	details := make([]string, 0, 2)
+	if failedSources > 0 {
+		details = append(details, fmt.Sprintf("%d failed", failedSources))
+	}
+	if skippedSources > 0 {
+		details = append(details, fmt.Sprintf("%d skipped", skippedSources))
+	}
+	if len(details) == 0 {
+		return message
+	}
+	return fmt.Sprintf("%s (%s)", message, strings.Join(details, ", "))
 }
 
 func removeWorkspaceKnowledgeArtifactsNotInSet(dir, extension string, keep map[string]struct{}) error {
@@ -573,4 +692,15 @@ func removeWorkspaceKnowledgeFile(path string) error {
 		return fmt.Errorf("remove workspace knowledge file %s: %w", path, err)
 	}
 	return nil
+}
+
+func workspaceKnowledgeFileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
