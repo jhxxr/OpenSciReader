@@ -17,10 +17,11 @@
 
 OpenSciReader is a modern, Wails-based desktop reader tailored for local academic PDF workflows, designed to provide a seamless reading, translation, and research experience.
 
-This branch includes a local PDF layout-translation pipeline built around Go job orchestration, a private Python worker (`pdf2zh_next.high_level.do_translate_async_stream`), and a React page-by-page preview replacement.
+This branch includes a local PDF layout-translation pipeline built around Go job orchestration, a private Python worker (`pdf2zh_next.high_level.do_translate_async_stream`), a React page-by-page preview replacement, and an AI workspace knowledge layer.
 
 ## ✨ 核心特性 (Features)
 
+### 🎯 阅读与翻译 (Reading & Translation)
 - **🧠 本地排版级翻译 (Local PDF Layout Translation):** View translations while preserving the original layout.
 - **📖 双栏阅读模式 (Dual-column reading mode):** 
   - Left column: Original PDF
@@ -31,6 +32,22 @@ This branch includes a local PDF layout-translation pipeline built around Go job
   - Full support for canceling and retrying jobs (`retryJobId`).
   - WebSocket event streaming for real-time progress updates.
   - Persisted job metadata and output file paths under the user config directory.
+
+### 🧠 工作区知识层 (Workspace Knowledge Layer)
+- **📁 文件级知识目录 (File-based Knowledge Directory):**
+  - `raw/`: Source inventory and normalized extracts
+  - `wiki/`: Human-readable knowledge artifacts
+  - `schema/`: Structured memory and operational logs
+- **🔍 工作区扫描 (Workspace Scan):** Automatic discovery and extraction of PDF/Markdown documents
+- **🧩 结构化记忆蒸馏 (Structured Memory Distillation):** Per-source extraction of entities, claims, tasks, and relations
+- **📝 编译聚合 (Compile & Aggregate):** Merge per-source memory into workspace-level knowledge with deduplication
+- **📖 Wiki 生成 (Wiki Generation):** Auto-generated overview, docs, concepts, and open-questions pages
+
+### 💬 智能侧边栏 (AI Copilot Sidebar)
+- **❓ Ask (知识问答):** Multi-scope question input (selection / page / document / workspace context)
+- **✅ Answer (答案):** Grounded answer rendered in Markdown
+- **📋 Evidence (证据):** Grouped, collapsible evidence display with confidence scores
+- **⭐ Promote (记忆晋升):** Review and promote candidate memories to formal workspace knowledge
 
 ## 📦 运行时打包策略 (Runtime Packaging)
 
@@ -97,6 +114,7 @@ The runtime package is assembled in CI from the pinned stack (embeddable CPython
 
 ## 📖 阅读器工作流 (Reader Workflow)
 
+### PDF 翻译流程
 1. Install **OpenSciReader**.
 2. Open settings and import the standalone runtime: `OpenSciReader-pdf-runtime-windows-amd64-<version>.zip`.
 3. Open a PDF in the reader.
@@ -106,12 +124,27 @@ The runtime package is assembled in CI from the pinned stack (embeddable CPython
 7. View translations on the right column chunk by chunk!
 8. Select `开始导出 mono + dual` (Export) and download translated/dual PDFs anytime.
 
+### 工作区知识流程
+1. Create or select a **Workspace**.
+2. Import PDF/Markdown documents into the workspace.
+3. Click `Refresh` to scan and extract knowledge.
+4. Browse **Entities / Claims / Tasks** in the Memory panel.
+5. Open the reader sidebar **Copilot** to ask questions.
+6. Review **Evidence** and promote candidate memories.
+
 ## 🔌 后端 API 参考 (Backend API)
 
-Endpoints served by the app-local HTTP handler:
+**PDF 翻译:**
 - `POST /api/pdf-translate/start`
 - `POST /api/pdf-translate/{jobId}/cancel`
 - `GET /api/pdf-translate/{jobId}/status`
 - `WS /api/pdf-translate/{jobId}/events`
 
-*(Please refer to the source directory for detailed JSON payloads and WebSocket event protocols: `internal/translator`, `pdf_translate_http.go`.)*
+**工作区知识:**
+- `ListWorkspaceKnowledgeEntities`
+- `ListWorkspaceKnowledgeClaims`
+- `ListWorkspaceKnowledgeTasks`
+- `QueryWorkspaceKnowledge`
+- `PromoteWorkspaceKnowledgeCandidates`
+
+*(Please refer to the source directory for detailed JSON payloads and WebSocket event protocols: `internal/translator`, `pdf_translate_http.go`, `workspace_knowledge_*.go`.)*
