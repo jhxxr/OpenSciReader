@@ -107,10 +107,44 @@ interface CopilotState {
   promoteError: string | null;
 }
 
-function getErrorMessage(error: unknown, context: string): string;
-function renderConfidenceBadge(confidence: number): React.ReactNode | null;
-function formatSourceSummary(sourceRefs: any[]): string;
-function formatSourceRefLabel(sourceRef: any): string;
+function getErrorMessage(error: unknown, context: string): string {
+  if (error instanceof Error) {
+    return `${context}: ${error.message}`;
+  }
+  if (typeof error === 'string') {
+    return `${context}: ${error}`;
+  }
+  return context;
+}
+
+function renderConfidenceBadge(confidence: number): React.ReactNode | null {
+  if (!Number.isFinite(confidence) || confidence <= 0) {
+    return null;
+  }
+  return <span className="badge badge-accent">{Math.round(confidence * 100)}%</span>;
+}
+
+function formatSourceSummary(sourceRefs: any[]): string {
+  if (!sourceRefs || sourceRefs.length === 0) {
+    return 'No source anchors';
+  }
+
+  const labels = sourceRefs.slice(0, 2).map(formatSourceRefLabel).filter(Boolean);
+  const suffix = sourceRefs.length > 2 ? ` +${sourceRefs.length - 2}` : '';
+  return `Sources: ${sourceRefs.length}${labels.length > 0 ? ` (${labels.join(' / ')}${suffix})` : ''}`;
+}
+
+function formatSourceRefLabel(sourceRef: any): string {
+  if (sourceRef.pageStart > 0 && sourceRef.pageEnd > 0) {
+    return sourceRef.pageStart === sourceRef.pageEnd
+      ? `p.${sourceRef.pageStart}`
+      : `pp.${sourceRef.pageStart}-${sourceRef.pageEnd}`;
+  }
+  if (sourceRef.pageStart > 0) {
+    return `p.${sourceRef.pageStart}`;
+  }
+  return sourceRef.sourceId || '';
+}
 
 const PRESET_CARDS: PresetCard[] = [
   {
