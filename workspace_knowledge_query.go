@@ -39,6 +39,11 @@ type workspaceKnowledgeConversationLogEntry struct {
 	PromotedClaimIDs []string                      `json:"promotedClaimIds,omitempty"`
 }
 
+type workspaceKnowledgeEvidenceCandidate struct {
+	hit        WorkspaceKnowledgeEvidenceHit
+	searchText string
+}
+
 func newWorkspaceKnowledgeQueryService(paths appPaths, llm workspaceKnowledgeQueryLLM) *workspaceKnowledgeQueryService {
 	return &workspaceKnowledgeQueryService{
 		paths: paths,
@@ -86,7 +91,7 @@ func (s *workspaceKnowledgeQueryService) Query(ctx context.Context, input Worksp
 		result.Candidates = normalizeWorkspaceKnowledgeCandidates(payload.Candidates)
 	}
 
-	if err := appendWorkspaceKnowledgeConversationLog(files, workspaceKnowledgeConversationLogEntry{
+	appendWorkspaceKnowledgeConversationLogBestEffort(files, workspaceKnowledgeConversationLogEntry{
 		Type:        "query",
 		Timestamp:   nowRFC3339(),
 		WorkspaceID: workspaceID,
@@ -96,9 +101,7 @@ func (s *workspaceKnowledgeQueryService) Query(ctx context.Context, input Worksp
 		EvidenceIDs: workspaceKnowledgeEvidenceIDs(result.Evidence),
 		Answer:      result.Answer,
 		Candidates:  result.Candidates,
-	}); err != nil {
-		return WorkspaceKnowledgeQueryResult{}, err
-	}
+	})
 
 	return result, nil
 }
@@ -119,7 +122,6 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 		return err
 	}
 
-	now := nowRFC3339()
 	claimsByID := make(map[string]WorkspaceKnowledgeClaim, len(existingClaims))
 	for _, claim := range existingClaims {
 		claimsByID[claim.ID] = claim
@@ -127,27 +129,26 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 
 	promotedClaimIDs := make([]string, 0, len(input.Candidates))
 	claimsChanged := false
+	now := nowRFC3339()
 	for _, candidate := range normalizeWorkspaceKnowledgeCandidates(input.Candidates) {
 		if strings.TrimSpace(candidate.Type) != "claim" {
 			continue
 		}
 
-		id := strings.TrimSpace(candidate.ID)
-		title := strings.TrimSpace(candidate.Title)
-		if id == "" {
-			slug := workspaceKnowledgeSlug(firstNonEmptyText(title, candidate.Summary))
-			if slug == "" {
-				continue
-			}
-			id = "claim:" + slug
-		}
-		if title == "" {
-			title = id
+		canonicalID := canonicalWorkspaceKnowledgeClaimID(candidate)
+		if canonicalID == "" {
+			continue
 		}
 
-		claim, changed := mergeWorkspaceKnowledgePromotedClaim(claimsByID[id], workspaceID, WorkspaceKnowledgeCandidate{
-			ID:         id,
-			Title:      title,
+		existingClaim, existingKey := findWorkspaceKnowledgeClaimForCandidate(claimsByID, canonicalID, candidate)
+		if existingKey != "" && existingKey != canonicalID {
+			delete(claimsByID, existingKey)
+			claimsChanged = true
+		}
+
+		claim, changed := mergeWorkspaceKnowledgePromotedClaim(existingClaim, canonicalID, workspaceID, WorkspaceKnowledgeCandidate{
+			ID:         canonicalID,
+			Title:      firstNonEmptyText(strings.TrimSpace(candidate.Title), canonicalID),
 			Type:       candidate.Type,
 			Summary:    candidate.Summary,
 			EntityIDs:  candidate.EntityIDs,
@@ -157,9 +158,9 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 			PageEnd:    candidate.PageEnd,
 			Excerpt:    candidate.Excerpt,
 		}, now)
-		claimsByID[id] = claim
+		claimsByID[canonicalID] = claim
 		claimsChanged = claimsChanged || changed
-		promotedClaimIDs = append(promotedClaimIDs, id)
+		promotedClaimIDs = append(promotedClaimIDs, canonicalID)
 	}
 
 	claims := make([]WorkspaceKnowledgeClaim, 0, len(claimsByID))
@@ -180,12 +181,13 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 		}
 	}
 
-	return appendWorkspaceKnowledgeConversationLog(files, workspaceKnowledgeConversationLogEntry{
+	appendWorkspaceKnowledgeConversationLogBestEffort(files, workspaceKnowledgeConversationLogEntry{
 		Type:             "promotion",
 		Timestamp:        now,
 		WorkspaceID:      workspaceID,
 		PromotedClaimIDs: promotedClaimIDs,
 	})
+	return nil
 }
 
 func (s *workspaceKnowledgeQueryService) ListEntities(_ context.Context, workspaceID string) ([]WorkspaceKnowledgeEntity, error) {
@@ -385,13 +387,28 @@ func retrieveWorkspaceKnowledgeEvidence(files workspaceKnowledgeFiles, question 
 	if err == nil && len(schemaEvidence) > 0 {
 		return schemaEvidence, nil
 	}
+	schemaErr := err
 
 	wikiEvidence, err := retrieveWorkspaceKnowledgeWikiEvidence(files, question)
 	if err == nil && len(wikiEvidence) > 0 {
 		return wikiEvidence, nil
 	}
+	wikiErr := err
 
-	return retrieveWorkspaceKnowledgeRawEvidence(files, question)
+	rawEvidence, rawErr := retrieveWorkspaceKnowledgeRawEvidence(files, question)
+	if rawErr == nil && len(rawEvidence) > 0 {
+		return rawEvidence, nil
+	}
+	if rawErr != nil {
+		return nil, rawErr
+	}
+	if schemaErr != nil {
+		return nil, schemaErr
+	}
+	if wikiErr != nil {
+		return nil, wikiErr
+	}
+	return rawEvidence, nil
 }
 
 func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
@@ -564,7 +581,8 @@ func retrieveWorkspaceKnowledgeRawEvidence(files workspaceKnowledgeFiles, questi
 		return nil, err
 	}
 
-	hits := make([]WorkspaceKnowledgeEvidenceHit, 0, len(entries))
+	candidates := make([]workspaceKnowledgeEvidenceCandidate, 0, len(entries))
+	var firstErr error
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
 			continue
@@ -572,23 +590,36 @@ func retrieveWorkspaceKnowledgeRawEvidence(files workspaceKnowledgeFiles, questi
 		path := filepath.Join(extractsDir, entry.Name())
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read workspace knowledge extract %s: %w", path, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read workspace knowledge extract %s: %w", path, err)
+			}
+			continue
 		}
 		trimmed := strings.TrimSpace(string(content))
 		if trimmed == "" {
 			continue
 		}
 		slug := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		hits = append(hits, WorkspaceKnowledgeEvidenceHit{
-			Kind:       "extract",
-			ID:         "extract:" + slug,
-			Title:      workspaceKnowledgeReadableTitle(slug),
-			Summary:    firstWorkspaceKnowledgeMarkdownLine(trimmed),
-			Excerpt:    workspaceKnowledgeTrimmedExcerpt(trimmed),
-			SourceRefs: sourceRefsBySlug[slug],
+		candidates = append(candidates, workspaceKnowledgeEvidenceCandidate{
+			hit: WorkspaceKnowledgeEvidenceHit{
+				Kind:       "extract",
+				ID:         "extract:" + slug,
+				Title:      workspaceKnowledgeReadableTitle(slug),
+				Summary:    firstWorkspaceKnowledgeMarkdownLine(trimmed),
+				Excerpt:    workspaceKnowledgeTrimmedExcerpt(trimmed),
+				SourceRefs: sourceRefsBySlug[slug],
+			},
+			searchText: trimmed,
 		})
 	}
-	return selectRelevantWorkspaceKnowledgeHits(question, hits), nil
+	selected := selectRelevantWorkspaceKnowledgeEvidenceCandidates(question, candidates)
+	if len(selected) > 0 {
+		return selected, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return []WorkspaceKnowledgeEvidenceHit{}, nil
 }
 
 func workspaceKnowledgeSourceRefsBySlug(files workspaceKnowledgeFiles) (map[string][]WorkspaceKnowledgeSourceRef, error) {
@@ -609,23 +640,31 @@ func workspaceKnowledgeSourceRefsBySlug(files workspaceKnowledgeFiles) (map[stri
 }
 
 func selectRelevantWorkspaceKnowledgeHits(question string, hits []WorkspaceKnowledgeEvidenceHit) []WorkspaceKnowledgeEvidenceHit {
-	if len(hits) == 0 {
+	candidates := make([]workspaceKnowledgeEvidenceCandidate, 0, len(hits))
+	for _, hit := range hits {
+		candidates = append(candidates, workspaceKnowledgeEvidenceCandidate{hit: hit})
+	}
+	return selectRelevantWorkspaceKnowledgeEvidenceCandidates(question, candidates)
+}
+
+func selectRelevantWorkspaceKnowledgeEvidenceCandidates(question string, candidates []workspaceKnowledgeEvidenceCandidate) []WorkspaceKnowledgeEvidenceHit {
+	if len(candidates) == 0 {
 		return []WorkspaceKnowledgeEvidenceHit{}
 	}
 
 	terms := workspaceKnowledgeQueryTerms(question)
 	type scoredHit struct {
-		hit   WorkspaceKnowledgeEvidenceHit
+		hit   workspaceKnowledgeEvidenceCandidate
 		score int
 	}
 
-	scored := make([]scoredHit, 0, len(hits))
-	for _, hit := range hits {
-		score := workspaceKnowledgeHitScore(hit, terms)
+	scored := make([]scoredHit, 0, len(candidates))
+	for _, candidate := range candidates {
+		score := workspaceKnowledgeHitScore(candidate.hit, terms, candidate.searchText)
 		if score == 0 && len(terms) > 0 {
 			continue
 		}
-		scored = append(scored, scoredHit{hit: hit, score: score})
+		scored = append(scored, scoredHit{hit: candidate, score: score})
 	}
 	if len(scored) == 0 {
 		return []WorkspaceKnowledgeEvidenceHit{}
@@ -635,13 +674,13 @@ func selectRelevantWorkspaceKnowledgeHits(question string, hits []WorkspaceKnowl
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
 		}
-		if scored[i].hit.Kind != scored[j].hit.Kind {
-			return scored[i].hit.Kind < scored[j].hit.Kind
+		if scored[i].hit.hit.Kind != scored[j].hit.hit.Kind {
+			return scored[i].hit.hit.Kind < scored[j].hit.hit.Kind
 		}
-		if scored[i].hit.Title != scored[j].hit.Title {
-			return scored[i].hit.Title < scored[j].hit.Title
+		if scored[i].hit.hit.Title != scored[j].hit.hit.Title {
+			return scored[i].hit.hit.Title < scored[j].hit.hit.Title
 		}
-		return scored[i].hit.ID < scored[j].hit.ID
+		return scored[i].hit.hit.ID < scored[j].hit.hit.ID
 	})
 
 	limit := len(scored)
@@ -650,12 +689,12 @@ func selectRelevantWorkspaceKnowledgeHits(question string, hits []WorkspaceKnowl
 	}
 	selected := make([]WorkspaceKnowledgeEvidenceHit, 0, limit)
 	for _, candidate := range scored[:limit] {
-		selected = append(selected, candidate.hit)
+		selected = append(selected, candidate.hit.hit)
 	}
 	return selected
 }
 
-func workspaceKnowledgeHitScore(hit WorkspaceKnowledgeEvidenceHit, terms []string) int {
+func workspaceKnowledgeHitScore(hit WorkspaceKnowledgeEvidenceHit, terms []string, searchText string) int {
 	if len(terms) == 0 {
 		return 1
 	}
@@ -663,6 +702,7 @@ func workspaceKnowledgeHitScore(hit WorkspaceKnowledgeEvidenceHit, terms []strin
 	title := strings.ToLower(strings.TrimSpace(hit.Title))
 	summary := strings.ToLower(strings.TrimSpace(hit.Summary))
 	excerpt := strings.ToLower(strings.TrimSpace(hit.Excerpt))
+	fullText := strings.ToLower(strings.TrimSpace(searchText))
 	score := 0
 	for _, term := range terms {
 		if term == "" {
@@ -675,6 +715,9 @@ func workspaceKnowledgeHitScore(hit WorkspaceKnowledgeEvidenceHit, terms []strin
 			score += 3
 		}
 		if strings.Contains(excerpt, term) {
+			score++
+		}
+		if fullText != "" && !strings.Contains(title, term) && !strings.Contains(summary, term) && !strings.Contains(excerpt, term) && strings.Contains(fullText, term) {
 			score++
 		}
 	}
@@ -741,6 +784,10 @@ func appendWorkspaceKnowledgeConversationLog(files workspaceKnowledgeFiles, entr
 	return nil
 }
 
+func appendWorkspaceKnowledgeConversationLogBestEffort(files workspaceKnowledgeFiles, entry workspaceKnowledgeConversationLogEntry) {
+	_ = appendWorkspaceKnowledgeConversationLog(files, entry)
+}
+
 func candidateSourceRefs(candidate WorkspaceKnowledgeCandidate) []WorkspaceKnowledgeSourceRef {
 	if len(candidate.SourceRefs) > 0 {
 		return append([]WorkspaceKnowledgeSourceRef(nil), candidate.SourceRefs...)
@@ -756,17 +803,72 @@ func candidateSourceRefs(candidate WorkspaceKnowledgeCandidate) []WorkspaceKnowl
 	}}
 }
 
-func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, workspaceID string, candidate WorkspaceKnowledgeCandidate, now string) (WorkspaceKnowledgeClaim, bool) {
-	candidateSourceRefs := normalizeWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
+func canonicalWorkspaceKnowledgeClaimID(candidate WorkspaceKnowledgeCandidate) string {
+	title := strings.TrimSpace(candidate.Title)
+	summary := strings.TrimSpace(candidate.Summary)
+	entityIDs := normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs)
+	sourceRefs := uniqueWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
+
+	base := workspaceKnowledgeSlug(firstNonEmptyText(title, summary, firstExcerpt(sourceRefs), "claim"))
+	if base == "" {
+		return ""
+	}
+
+	anchorParts := make([]string, 0, len(sourceRefs))
+	for _, sourceRef := range sourceRefs {
+		anchorParts = append(anchorParts, fmt.Sprintf("%s:%d:%d", strings.TrimSpace(sourceRef.SourceID), sourceRef.PageStart, sourceRef.PageEnd))
+	}
+
+	key := strings.Join([]string{
+		workspaceKnowledgeStableKeyText(title),
+		workspaceKnowledgeStableKeyText(summary),
+		strings.Join(entityIDs, "|"),
+		strings.Join(anchorParts, "|"),
+	}, "\n")
+	keyHash := sha256Hex([]byte(strings.TrimSpace(key)))
+	if len(keyHash) > 12 {
+		keyHash = keyHash[:12]
+	}
+	if keyHash == "" {
+		return "claim:" + base
+	}
+	return "claim:" + base + "-" + keyHash
+}
+
+func findWorkspaceKnowledgeClaimForCandidate(claimsByID map[string]WorkspaceKnowledgeClaim, canonicalID string, candidate WorkspaceKnowledgeCandidate) (WorkspaceKnowledgeClaim, string) {
+	if claim, ok := claimsByID[canonicalID]; ok {
+		return claim, canonicalID
+	}
+	for existingID, claim := range claimsByID {
+		if canonicalWorkspaceKnowledgeClaimID(WorkspaceKnowledgeCandidate{
+			Title:      claim.Title,
+			Type:       claim.Type,
+			Summary:    claim.Summary,
+			EntityIDs:  claim.EntityIDs,
+			SourceRefs: claim.SourceRefs,
+		}) == canonicalID {
+			return claim, existingID
+		}
+	}
+	for existingID, claim := range claimsByID {
+		if workspaceKnowledgeClaimMatchesCandidate(claim, candidate) {
+			return claim, existingID
+		}
+	}
+	return WorkspaceKnowledgeClaim{}, ""
+}
+
+func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, canonicalID, workspaceID string, candidate WorkspaceKnowledgeCandidate, now string) (WorkspaceKnowledgeClaim, bool) {
+	candidateSourceRefs := uniqueWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
 	candidateEntityIDs := normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs)
 
 	if strings.TrimSpace(existing.ID) == "" {
 		createdAt := firstNonEmptyText(existing.CreatedAt, now)
 		updatedAt := firstNonEmptyText(existing.UpdatedAt, now)
 		return WorkspaceKnowledgeClaim{
-			ID:          strings.TrimSpace(candidate.ID),
+			ID:          strings.TrimSpace(canonicalID),
 			WorkspaceID: strings.TrimSpace(workspaceID),
-			Title:       firstNonEmptyText(strings.TrimSpace(candidate.Title), strings.TrimSpace(candidate.ID)),
+			Title:       firstNonEmptyText(strings.TrimSpace(candidate.Title), strings.TrimSpace(canonicalID)),
 			Type:        firstNonEmptyText(strings.TrimSpace(existing.Type), "claim"),
 			Summary:     strings.TrimSpace(candidate.Summary),
 			EntityIDs:   candidateEntityIDs,
@@ -780,6 +882,7 @@ func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, work
 	}
 
 	merged := existing
+	merged.ID = strings.TrimSpace(canonicalID)
 	if merged.WorkspaceID == "" {
 		merged.WorkspaceID = strings.TrimSpace(workspaceID)
 	}
@@ -807,8 +910,8 @@ func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, work
 		merged.CreatedAt = firstNonEmptyText(existing.CreatedAt, now)
 	}
 
-	changed := !workspaceKnowledgeClaimsEqualIgnoringUpdatedAt(existing, merged)
-	if changed {
+	timestampChanged := !workspaceKnowledgeClaimsEqualIgnoringIDAndUpdatedAt(existing, merged)
+	if timestampChanged {
 		merged.UpdatedAt = firstNonEmptyText(now, existing.UpdatedAt, merged.CreatedAt)
 	} else {
 		merged.UpdatedAt = existing.UpdatedAt
@@ -816,7 +919,32 @@ func mergeWorkspaceKnowledgePromotedClaim(existing WorkspaceKnowledgeClaim, work
 	if merged.UpdatedAt == "" {
 		merged.UpdatedAt = firstNonEmptyText(merged.CreatedAt, now)
 	}
+	changed := !workspaceKnowledgeClaimsEqualIgnoringUpdatedAt(existing, merged)
 	return merged, changed
+}
+
+func workspaceKnowledgeClaimMatchesCandidate(claim WorkspaceKnowledgeClaim, candidate WorkspaceKnowledgeCandidate) bool {
+	candidateTitle := workspaceKnowledgeStableKeyText(candidate.Title)
+	candidateSummary := workspaceKnowledgeStableKeyText(candidate.Summary)
+	candidateEntityIDs := normalizeWorkspaceKnowledgeStringSlice(candidate.EntityIDs)
+	candidateSourceRefs := uniqueWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate))
+
+	if candidateTitle == "" && candidateSummary == "" && len(candidateEntityIDs) == 0 && len(candidateSourceRefs) == 0 {
+		return false
+	}
+	if candidateTitle != "" && workspaceKnowledgeStableKeyText(claim.Title) != candidateTitle {
+		return false
+	}
+	if candidateSummary != "" && workspaceKnowledgeStableKeyText(claim.Summary) != candidateSummary {
+		return false
+	}
+	if len(candidateEntityIDs) > 0 && !equalWorkspaceKnowledgeStringSlices(normalizeWorkspaceKnowledgeStringSlice(claim.EntityIDs), candidateEntityIDs) {
+		return false
+	}
+	if len(candidateSourceRefs) > 0 && !equalWorkspaceKnowledgeSourceRefAnchors(uniqueWorkspaceKnowledgeSourceRefs(claim.SourceRefs), candidateSourceRefs) {
+		return false
+	}
+	return true
 }
 
 func normalizeWorkspaceKnowledgeCandidates(candidates []WorkspaceKnowledgeCandidate) []WorkspaceKnowledgeCandidate {
@@ -837,7 +965,7 @@ func normalizeWorkspaceKnowledgeCandidates(candidates []WorkspaceKnowledgeCandid
 			PageStart:  candidate.PageStart,
 			PageEnd:    candidate.PageEnd,
 			Excerpt:    strings.TrimSpace(candidate.Excerpt),
-			SourceRefs: normalizeWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate)),
+			SourceRefs: uniqueWorkspaceKnowledgeSourceRefs(candidateSourceRefs(candidate)),
 		})
 	}
 	return normalized
@@ -852,12 +980,25 @@ func mergeWorkspaceKnowledgeStringValues(existing, candidate []string) []string 
 func mergeWorkspaceKnowledgeSourceRefValues(existing, candidate []WorkspaceKnowledgeSourceRef) []WorkspaceKnowledgeSourceRef {
 	merged := append([]WorkspaceKnowledgeSourceRef(nil), existing...)
 	merged = append(merged, candidate...)
-	return normalizeWorkspaceKnowledgeSourceRefs(merged)
+	return uniqueWorkspaceKnowledgeSourceRefs(merged)
 }
 
 func workspaceKnowledgeClaimsEqualIgnoringUpdatedAt(left, right WorkspaceKnowledgeClaim) bool {
 	return left.ID == right.ID &&
 		left.WorkspaceID == right.WorkspaceID &&
+		left.Title == right.Title &&
+		left.Type == right.Type &&
+		left.Summary == right.Summary &&
+		left.Origin == right.Origin &&
+		left.Status == right.Status &&
+		left.Confidence == right.Confidence &&
+		left.CreatedAt == right.CreatedAt &&
+		equalWorkspaceKnowledgeStringSlices(left.EntityIDs, right.EntityIDs) &&
+		equalWorkspaceKnowledgeSourceRefs(left.SourceRefs, right.SourceRefs)
+}
+
+func workspaceKnowledgeClaimsEqualIgnoringIDAndUpdatedAt(left, right WorkspaceKnowledgeClaim) bool {
+	return left.WorkspaceID == right.WorkspaceID &&
 		left.Title == right.Title &&
 		left.Type == right.Type &&
 		left.Summary == right.Summary &&
@@ -893,6 +1034,18 @@ func equalWorkspaceKnowledgeSourceRefs(left, right []WorkspaceKnowledgeSourceRef
 	return true
 }
 
+func equalWorkspaceKnowledgeSourceRefAnchors(left, right []WorkspaceKnowledgeSourceRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].SourceID != right[index].SourceID || left[index].PageStart != right[index].PageStart || left[index].PageEnd != right[index].PageEnd {
+			return false
+		}
+	}
+	return true
+}
+
 func firstNonZeroFloat(values ...float64) float64 {
 	for _, value := range values {
 		if value != 0 {
@@ -900,6 +1053,25 @@ func firstNonZeroFloat(values ...float64) float64 {
 		}
 	}
 	return 0
+}
+
+func uniqueWorkspaceKnowledgeSourceRefs(sourceRefs []WorkspaceKnowledgeSourceRef) []WorkspaceKnowledgeSourceRef {
+	normalized := normalizeWorkspaceKnowledgeSourceRefs(sourceRefs)
+	if len(normalized) == 0 {
+		return []WorkspaceKnowledgeSourceRef{}
+	}
+	unique := make([]WorkspaceKnowledgeSourceRef, 0, len(normalized))
+	for _, sourceRef := range normalized {
+		if len(unique) > 0 && unique[len(unique)-1] == sourceRef {
+			continue
+		}
+		unique = append(unique, sourceRef)
+	}
+	return unique
+}
+
+func workspaceKnowledgeStableKeyText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 func normalizeWorkspaceKnowledgeStringSlice(values []string) []string {
