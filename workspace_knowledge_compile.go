@@ -146,7 +146,7 @@ func writeWorkspaceKnowledgeWiki(files workspaceKnowledgeFiles, workspaceTitle s
 	}
 
 	for _, payload := range payloads {
-		documentPath, err := files.DocumentWikiPath(firstNonEmptyText(payload.Source.Slug, payload.Source.ID))
+		documentPath, err := files.DocumentWikiPath(workspaceKnowledgeSourceWikiSlug(payload.Source))
 		if err != nil {
 			return err
 		}
@@ -250,7 +250,7 @@ func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSna
 			builder.WriteString("- [")
 			builder.WriteString(firstNonEmptyText(source.Title, source.Slug, source.ID))
 			builder.WriteString("](docs/")
-			builder.WriteString(firstNonEmptyText(source.Slug, workspaceKnowledgeSlug(source.ID)))
+			builder.WriteString(workspaceKnowledgeSourceWikiSlug(source))
 			builder.WriteString(".md)\n")
 		}
 	}
@@ -573,6 +573,16 @@ func workspaceKnowledgeSlug(value string) string {
 		return "item"
 	}
 	return slug
+}
+
+func workspaceKnowledgeSourceWikiSlug(source WorkspaceKnowledgeSource) string {
+	if trimmedSlug := strings.TrimSpace(source.Slug); trimmedSlug != "" {
+		return trimmedSlug
+	}
+	if slug := workspaceKnowledgeSlug(source.ID); slug != "" {
+		return slug
+	}
+	return workspaceKnowledgeSlug(firstNonEmptyText(source.Title, "source"))
 }
 
 func lessSource(left, right WorkspaceKnowledgeSource) bool {

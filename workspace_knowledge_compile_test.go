@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		}},
 	}
 	payloadB := WorkspaceKnowledgeBySourcePayload{
-		Source: WorkspaceKnowledgeSource{ID: "source:paper-b", WorkspaceID: "workspace-a", Title: "Paper B", Slug: "paper-b", Kind: "markdown"},
+		Source: WorkspaceKnowledgeSource{ID: "source:paper-b", WorkspaceID: "workspace-a", Title: "Paper B", Slug: "", Kind: "markdown"},
 		Tasks: []WorkspaceKnowledgeTask{{
 			ID:          "task:compare-paper-a-paper-b",
 			WorkspaceID: "workspace-a",
@@ -103,8 +104,16 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 	if len(snapshot.Tasks) != 1 {
 		t.Fatalf("tasks = %d, want 1", len(snapshot.Tasks))
 	}
+	if len(snapshot.Relations) != 0 {
+		t.Fatalf("relations = %d, want 0", len(snapshot.Relations))
+	}
 
 	workspaceDir := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
+	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "entities.json"), 1)
+	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "claims.json"), 1)
+	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "relations.json"), 0)
+	assertWorkspaceKnowledgeJSONCount(t, filepath.Join(workspaceDir, "schema", "tasks.json"), 1)
+
 	overview, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "overview.md"))
 	if err != nil {
 		t.Fatalf("read overview.md error: %v", err)
@@ -113,11 +122,52 @@ func TestCompileWorkspaceKnowledgeBuildsAggregatesAndWiki(t *testing.T) {
 		t.Fatalf("overview.md = %q, want workspace title", string(overview))
 	}
 
+	openQuestions, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "open-questions.md"))
+	if err != nil {
+		t.Fatalf("read open-questions.md error: %v", err)
+	}
+	if !strings.Contains(string(openQuestions), "Compare Paper A and Paper B") {
+		t.Fatalf("open-questions.md = %q, want task title", string(openQuestions))
+	}
+
+	documentPageA, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "docs", "paper-a.md"))
+	if err != nil {
+		t.Fatalf("read paper-a document page error: %v", err)
+	}
+	if !strings.Contains(string(documentPageA), "Paper A") {
+		t.Fatalf("paper-a document page = %q, want source title", string(documentPageA))
+	}
+
+	documentPageB, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "docs", "source-paper-b.md"))
+	if err != nil {
+		t.Fatalf("read source-paper-b document page error: %v", err)
+	}
+	if !strings.Contains(string(documentPageB), "Paper B") {
+		t.Fatalf("source-paper-b document page = %q, want source title", string(documentPageB))
+	}
+
 	conceptPage, err := os.ReadFile(filepath.Join(workspaceDir, "wiki", "concepts", "contrastive-memory.md"))
 	if err != nil {
 		t.Fatalf("read concept page error: %v", err)
 	}
 	if !strings.Contains(string(conceptPage), "Contrastive Memory") {
 		t.Fatalf("concept page = %q, want concept title", string(conceptPage))
+	}
+}
+
+func assertWorkspaceKnowledgeJSONCount(t *testing.T, path string, want int) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s error: %v", filepath.Base(path), err)
+	}
+
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("unmarshal %s error: %v", filepath.Base(path), err)
+	}
+	if len(records) != want {
+		t.Fatalf("%s records = %d, want %d", filepath.Base(path), len(records), want)
 	}
 }
