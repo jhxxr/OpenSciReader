@@ -1,0 +1,37 @@
+.wiki-model-selector {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.wiki-provider-select,
+.wiki-model-select {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--input-bg);
+  color: var(--text-color);
+  font-size: 12px;
+  min-width: 120px;
+  max-width: 150px;
+}
+
+.wiki-provider-select:focus,
+.wiki-model-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.wiki-provider-select:disabled,
+.wiki-model-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wiki-scan-model-info {
+  display: block;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-size: 11px;
+}
