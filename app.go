@@ -11,14 +11,15 @@ import (
 
 // App struct
 type App struct {
-	ctx           context.Context
-	store         *configStore
-	paths         appPaths
-	zotero        *zoteroService
-	gateway       *gatewayService
-	pdf           *pdfService
-	workspaceWiki *workspaceWikiService
-	translator    *translator.Manager
+	ctx                context.Context
+	store              *configStore
+	paths              appPaths
+	zotero             *zoteroService
+	gateway            *gatewayService
+	pdf                *pdfService
+	workspaceWiki      *workspaceWikiService
+	workspaceKnowledge *workspaceKnowledgeQueryService
+	translator         *translator.Manager
 }
 
 // NewApp creates a new App application struct
@@ -47,6 +48,7 @@ func (a *App) startup(ctx context.Context) {
 	a.gateway = newGatewayService(store)
 	a.pdf = newPDFService(store)
 	a.workspaceWiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
+	a.workspaceKnowledge = newWorkspaceKnowledgeQueryService(paths, a.gateway)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
 }
 
@@ -200,6 +202,41 @@ func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (Workspa
 		return WorkspaceWikiScanJob{}, fmt.Errorf("workspace wiki service is unavailable")
 	}
 	return a.workspaceWiki.StartScan(a.ctx, input)
+}
+
+func (a *App) QueryWorkspaceKnowledge(input WorkspaceKnowledgeQueryInput) (WorkspaceKnowledgeQueryResult, error) {
+	if a.workspaceKnowledge == nil {
+		return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace knowledge service is unavailable")
+	}
+	return a.workspaceKnowledge.Query(a.ctx, input)
+}
+
+func (a *App) PromoteWorkspaceKnowledge(input WorkspaceKnowledgePromotionInput) error {
+	if a.workspaceKnowledge == nil {
+		return fmt.Errorf("workspace knowledge service is unavailable")
+	}
+	return a.workspaceKnowledge.Promote(a.ctx, input)
+}
+
+func (a *App) ListWorkspaceKnowledgeEntities(workspaceID string) ([]WorkspaceKnowledgeEntity, error) {
+	if a.workspaceKnowledge == nil {
+		return nil, fmt.Errorf("workspace knowledge service is unavailable")
+	}
+	return a.workspaceKnowledge.ListEntities(a.ctx, workspaceID)
+}
+
+func (a *App) ListWorkspaceKnowledgeClaims(workspaceID string) ([]WorkspaceKnowledgeClaim, error) {
+	if a.workspaceKnowledge == nil {
+		return nil, fmt.Errorf("workspace knowledge service is unavailable")
+	}
+	return a.workspaceKnowledge.ListClaims(a.ctx, workspaceID)
+}
+
+func (a *App) ListWorkspaceKnowledgeTasks(workspaceID string) ([]WorkspaceKnowledgeTask, error) {
+	if a.workspaceKnowledge == nil {
+		return nil, fmt.Errorf("workspace knowledge service is unavailable")
+	}
+	return a.workspaceKnowledge.ListTasks(a.ctx, workspaceID)
 }
 
 func (a *App) StreamLLMChat(providerID, modelID int64, prompt string, contextData GatewayContextData) (string, error) {

@@ -94,6 +94,18 @@ export function ListReaderNotes(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListReaderNotes'](arg1, arg2, arg3);
 }
 
+export function ListWorkspaceKnowledgeClaims(arg1) {
+  return window['go']['main']['App']['ListWorkspaceKnowledgeClaims'](arg1);
+}
+
+export function ListWorkspaceKnowledgeEntities(arg1) {
+  return window['go']['main']['App']['ListWorkspaceKnowledgeEntities'](arg1);
+}
+
+export function ListWorkspaceKnowledgeTasks(arg1) {
+  return window['go']['main']['App']['ListWorkspaceKnowledgeTasks'](arg1);
+}
+
 export function ListWorkspaces() {
   return window['go']['main']['App']['ListWorkspaces']();
 }
@@ -102,8 +114,16 @@ export function LoadPDFDocument(arg1) {
   return window['go']['main']['App']['LoadPDFDocument'](arg1);
 }
 
+export function PromoteWorkspaceKnowledge(arg1) {
+  return window['go']['main']['App']['PromoteWorkspaceKnowledge'](arg1);
+}
+
 export function ProxyTranslation(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ProxyTranslation'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function QueryWorkspaceKnowledge(arg1) {
+  return window['go']['main']['App']['QueryWorkspaceKnowledge'](arg1);
 }
 
 export function RemovePDFTranslateRuntime() {
@@ -144,6 +164,10 @@ export function SelectPDFTranslateRuntimePackage() {
 
 export function StartPDFTranslate(arg1) {
   return window['go']['main']['App']['StartPDFTranslate'](arg1);
+}
+
+export function StartWorkspaceWikiScan(arg1) {
+  return window['go']['main']['App']['StartWorkspaceWikiScan'](arg1);
 }
 
 export function StreamLLMChat(arg1, arg2, arg3, arg4) {

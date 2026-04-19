@@ -217,6 +217,39 @@ type WorkspaceKnowledgeEvidenceHit struct {
 	SourceRefs []WorkspaceKnowledgeSourceRef `json:"sourceRefs"`
 }
 
+type WorkspaceKnowledgeQueryInput struct {
+	WorkspaceID string `json:"workspaceId"`
+	ProviderID  int64  `json:"providerId"`
+	ModelID     int64  `json:"modelId"`
+	Question    string `json:"question"`
+}
+
+type WorkspaceKnowledgeCandidate struct {
+	ID         string                        `json:"id"`
+	Title      string                        `json:"title"`
+	Type       string                        `json:"type"`
+	Summary    string                        `json:"summary"`
+	Aliases    []string                      `json:"aliases"`
+	EntityIDs  []string                      `json:"entityIds"`
+	Priority   string                        `json:"priority"`
+	SourceID   string                        `json:"sourceId"`
+	PageStart  int                           `json:"pageStart"`
+	PageEnd    int                           `json:"pageEnd"`
+	Excerpt    string                        `json:"excerpt"`
+	SourceRefs []WorkspaceKnowledgeSourceRef `json:"sourceRefs"`
+}
+
+type WorkspaceKnowledgeQueryResult struct {
+	Answer     string                          `json:"answer"`
+	Evidence   []WorkspaceKnowledgeEvidenceHit `json:"evidence"`
+	Candidates []WorkspaceKnowledgeCandidate   `json:"candidates"`
+}
+
+type WorkspaceKnowledgePromotionInput struct {
+	WorkspaceID string                        `json:"workspaceId"`
+	Candidates  []WorkspaceKnowledgeCandidate `json:"candidates"`
+}
+
 type DiscoveredModel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`

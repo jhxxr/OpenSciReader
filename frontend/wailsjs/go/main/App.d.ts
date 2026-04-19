@@ -49,11 +49,21 @@ export function ListPDFTranslateJobs():Promise<Array<translator.JobSnapshot>>;
 
 export function ListReaderNotes(arg1:string,arg2:string,arg3:string):Promise<Array<main.ReaderNoteEntry>>;
 
+export function ListWorkspaceKnowledgeClaims(arg1:string):Promise<Array<main.WorkspaceKnowledgeClaim>>;
+
+export function ListWorkspaceKnowledgeEntities(arg1:string):Promise<Array<main.WorkspaceKnowledgeEntity>>;
+
+export function ListWorkspaceKnowledgeTasks(arg1:string):Promise<Array<main.WorkspaceKnowledgeTask>>;
+
 export function ListWorkspaces():Promise<Array<main.Workspace>>;
 
 export function LoadPDFDocument(arg1:string):Promise<main.PDFDocumentPayload>;
 
+export function PromoteWorkspaceKnowledge(arg1:main.WorkspaceKnowledgePromotionInput):Promise<void>;
+
 export function ProxyTranslation(arg1:number,arg2:number,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function QueryWorkspaceKnowledge(arg1:main.WorkspaceKnowledgeQueryInput):Promise<main.WorkspaceKnowledgeQueryResult>;
 
 export function RemovePDFTranslateRuntime():Promise<void>;
 
@@ -74,5 +84,7 @@ export function SelectImportFiles():Promise<Array<string>>;
 export function SelectPDFTranslateRuntimePackage():Promise<string>;
 
 export function StartPDFTranslate(arg1:main.PDFTranslateStartInput):Promise<translator.JobSnapshot>;
+
+export function StartWorkspaceWikiScan(arg1:main.WorkspaceWikiScanStartInput):Promise<main.WorkspaceWikiScanJob>;
 
 export function StreamLLMChat(arg1:number,arg2:number,arg3:string,arg4:main.GatewayContextData):Promise<string>;

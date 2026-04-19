@@ -283,6 +283,32 @@ func (g *gatewayService) GenerateWorkspaceKnowledgeMarkdown(ctx context.Context,
 	})
 }
 
+func (g *gatewayService) GenerateWorkspaceKnowledgeQuery(ctx context.Context, providerID, modelID int64, prompt string) (WorkspaceKnowledgeQueryResult, error) {
+	text, err := g.generateOpenAICompatibleText(ctx, providerID, modelID, []map[string]any{
+		{
+			"role":    "system",
+			"content": "Return only valid JSON for the requested workspace knowledge query payload.",
+		},
+		{
+			"role":    "user",
+			"content": strings.TrimSpace(prompt),
+		},
+	})
+	if err != nil {
+		return WorkspaceKnowledgeQueryResult{}, err
+	}
+
+	text = stripMarkdownCodeFence(text)
+	var payload WorkspaceKnowledgeQueryResult
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("decode workspace knowledge query payload: %w", err)
+	}
+	if payload.Candidates == nil {
+		payload.Candidates = []WorkspaceKnowledgeCandidate{}
+	}
+	return payload, nil
+}
+
 func (g *gatewayService) generateOpenAICompatibleText(ctx context.Context, providerID, modelID int64, messages []map[string]any) (string, error) {
 	provider, model, err := g.loadOpenAICompatibleProviderModel(ctx, providerID, modelID)
 	if err != nil {
