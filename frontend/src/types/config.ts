@@ -102,6 +102,8 @@ export interface AIWorkspaceConfig {
   drawingPromptDraft: string;
   drawingProviderId: number;
   drawingModel: string;
+  wikiScanProviderId: number;
+  wikiScanModelId: number;
 }
 
 export const DEFAULT_AI_WORKSPACE_CONFIG: AIWorkspaceConfig = {
@@ -127,6 +129,8 @@ export const DEFAULT_AI_WORKSPACE_CONFIG: AIWorkspaceConfig = {
     "额外要求：图中文字尽量使用简体中文，整体像一页适合组会汇报的科研海报。",
   drawingProviderId: 0,
   drawingModel: "gemini-3-pro-image-preview",
+  wikiScanProviderId: 0,
+  wikiScanModelId: 0,
 };
 
 export interface DiscoveredModel {
