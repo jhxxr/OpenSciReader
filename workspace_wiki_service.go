@@ -226,6 +226,11 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		return err
 	}
 	existingByID := workspaceKnowledgeSourcesByID(manifest)
+	for index := range sources {
+		if existingSource, ok := existingByID[sources[index].ID]; ok {
+			sources[index] = mergeWorkspaceKnowledgeSourceState(existingSource, sources[index])
+		}
+	}
 
 	fullScan := strings.TrimSpace(job.DocumentID) == ""
 	if fullScan {
@@ -275,6 +280,9 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		if err := r.processSource(ctx, workspace, job, files, &sources[index]); err != nil {
 			failureCount++
 			failedSourceIDs = append(failedSourceIDs, sources[index].ID)
+			if err := files.DeleteBySource(sources[index].Slug); err != nil {
+				return err
+			}
 			if err := persistWorkspaceKnowledgeSource(files, manifestByID, sources[index]); err != nil {
 				return err
 			}
@@ -627,6 +635,9 @@ func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job W
 	if err := files.EnsureLayout(); err != nil {
 		return err
 	}
+	if err := files.DeleteCompileSummary(); err != nil {
+		return err
+	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
 		ID:          strings.TrimSpace(job.JobID),
 		WorkspaceID: workspaceID,
@@ -644,6 +655,9 @@ func (r *workspaceWikiScanRunner) writeScanRunCancelled(job WorkspaceWikiScanJob
 	}
 	files := newWorkspaceKnowledgeFiles(r.paths, workspaceID)
 	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := files.DeleteCompileSummary(); err != nil {
 		return err
 	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
@@ -715,6 +729,14 @@ func mergeSkippedWorkspaceKnowledgeSource(existingSource, currentSource Workspac
 	existingSource.ExtractPath = currentSource.ExtractPath
 	existingSource.DocumentID = currentSource.DocumentID
 	return existingSource
+}
+
+func mergeWorkspaceKnowledgeSourceState(existingSource, currentSource WorkspaceKnowledgeSource) WorkspaceKnowledgeSource {
+	currentSource.MarkItDownPath = firstNonEmptyText(currentSource.MarkItDownPath, existingSource.MarkItDownPath)
+	currentSource.ExtractPath = firstNonEmptyText(currentSource.ExtractPath, existingSource.ExtractPath)
+	currentSource.LastIngestAt = existingSource.LastIngestAt
+	currentSource.LastSuccessAt = existingSource.LastSuccessAt
+	return currentSource
 }
 
 func persistWorkspaceKnowledgeSource(files workspaceKnowledgeFiles, manifestByID map[string]WorkspaceKnowledgeSource, source WorkspaceKnowledgeSource) error {

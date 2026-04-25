@@ -157,6 +157,17 @@ func (f workspaceKnowledgeFiles) WriteCompileSummary(summary WorkspaceKnowledgeC
 	return writeWorkspaceKnowledgeJSON(compileSummaryPath, summary)
 }
 
+func (f workspaceKnowledgeFiles) DeleteCompileSummary() error {
+	compileSummaryPath, err := f.CompileSummaryPath()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(compileSummaryPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove workspace knowledge compile summary: %w", err)
+	}
+	return nil
+}
+
 func (f workspaceKnowledgeFiles) ReadCompileSummary() (WorkspaceKnowledgeCompileSummary, error) {
 	compileSummaryPath, err := f.CompileSummaryPath()
 	if err != nil {
@@ -209,6 +220,17 @@ func (f workspaceKnowledgeFiles) ReadBySource(sourceSlug string) (WorkspaceKnowl
 		return WorkspaceKnowledgeBySourcePayload{}, err
 	}
 	return payload, nil
+}
+
+func (f workspaceKnowledgeFiles) DeleteBySource(sourceSlug string) error {
+	bySourcePath, err := f.BySourcePath(sourceSlug)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(bySourcePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove workspace knowledge by-source payload %s: %w", bySourcePath, err)
+	}
+	return nil
 }
 
 func (f workspaceKnowledgeFiles) WriteScanRun(record WorkspaceKnowledgeScanRunRecord) error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,19 +145,196 @@ func TestStartWorkspaceWikiScanPersistsSourceProcessingState(t *testing.T) {
 	}
 }
 
+func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	seedPath := filepath.Join(t.TempDir(), "seed.md")
+	if err := os.WriteFile(seedPath, []byte("# Seed\n\nA markdown source for rerun failure coverage."), 0o600); err != nil {
+		t.Fatalf("WriteFile(seedPath) error = %v", err)
+	}
+
+	importResult, err := store.ImportFiles(ctx, paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{seedPath},
+		SourceType:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles() error = %v", err)
+	}
+	if len(importResult.Documents) != 1 {
+		t.Fatalf("ImportFiles() documents = %d, want 1", len(importResult.Documents))
+	}
+
+	files := newWorkspaceKnowledgeFiles(paths, workspace.ID)
+	service := newWorkspaceWikiService(paths, store, panicWorkspaceKnowledgeExtractor{}, stubWorkspaceKnowledgeLLM{
+		payload: WorkspaceKnowledgeBySourcePayload{
+			Entities: []WorkspaceKnowledgeEntity{{ID: "entity:seed", Title: "Seed Entity", Type: "concept", Summary: "seed summary"}},
+		},
+	})
+
+	firstJob, err := service.StartScan(ctx, WorkspaceWikiScanStartInput{WorkspaceID: workspace.ID})
+	if err != nil {
+		t.Fatalf("first StartScan() error = %v", err)
+	}
+	firstJob = waitForWorkspaceWikiJobTerminal(t, store, firstJob.JobID)
+	if firstJob.Status != WorkspaceWikiScanJobCompleted {
+		t.Fatalf("first job.Status = %q, want %q (error=%q)", firstJob.Status, WorkspaceWikiScanJobCompleted, firstJob.Error)
+	}
+
+	firstSources, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() after first run error = %v", err)
+	}
+	if len(firstSources) != 1 {
+		t.Fatalf("ReadSources() after first run len = %d, want 1", len(firstSources))
+	}
+	firstSuccessAt := firstSources[0].LastSuccessAt
+	if firstSuccessAt == "" {
+		t.Fatalf("first source LastSuccessAt = %q, want non-empty", firstSuccessAt)
+	}
+	bySourcePath, err := files.BySourcePath(firstSources[0].Slug)
+	if err != nil {
+		t.Fatalf("BySourcePath() error = %v", err)
+	}
+	if _, err := os.Stat(bySourcePath); err != nil {
+		t.Fatalf("Stat(bySourcePath) after first run error = %v", err)
+	}
+	if err := os.WriteFile(importResult.Documents[0].PrimaryPDFPath, []byte("# Seed\n\nUpdated content that forces a rerun."), 0o600); err != nil {
+		t.Fatalf("WriteFile(imported source) before second run error = %v", err)
+	}
+
+	failingService := newWorkspaceWikiService(paths, store, panicWorkspaceKnowledgeExtractor{}, stubWorkspaceKnowledgeLLM{
+		bySourceErr: fmt.Errorf("llm exploded"),
+	})
+	secondJob, err := failingService.StartScan(ctx, WorkspaceWikiScanStartInput{WorkspaceID: workspace.ID})
+	if err != nil {
+		t.Fatalf("second StartScan() error = %v", err)
+	}
+	secondJob = waitForWorkspaceWikiJobTerminal(t, store, secondJob.JobID)
+	if secondJob.Status != WorkspaceWikiScanJobCompleted {
+		t.Fatalf("second job.Status = %q, want %q (error=%q)", secondJob.Status, WorkspaceWikiScanJobCompleted, secondJob.Error)
+	}
+
+	secondSources, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() after second run error = %v", err)
+	}
+	if len(secondSources) != 1 {
+		t.Fatalf("ReadSources() after second run len = %d, want 1", len(secondSources))
+	}
+	if secondSources[0].LastSuccessAt != firstSuccessAt {
+		t.Fatalf("second source LastSuccessAt = %q, want preserved %q", secondSources[0].LastSuccessAt, firstSuccessAt)
+	}
+	if secondSources[0].ExtractStatus != "failed" {
+		t.Fatalf("second source ExtractStatus = %q, want %q", secondSources[0].ExtractStatus, "failed")
+	}
+	if secondSources[0].LastError == "" {
+		t.Fatalf("second source LastError = %q, want non-empty", secondSources[0].LastError)
+	}
+	if _, err := os.Stat(bySourcePath); !os.IsNotExist(err) {
+		t.Fatalf("Stat(bySourcePath) after second run error = %v, want not exist", err)
+	}
+
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	var entities []WorkspaceKnowledgeEntity
+	if err := readJSONFile(entitiesPath, &entities); err != nil {
+		t.Fatalf("readJSONFile(entitiesPath) error = %v", err)
+	}
+	if len(entities) != 0 {
+		t.Fatalf("entities after failed rerun = %d, want 0", len(entities))
+	}
+
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		t.Fatalf("ReadCompileSummary() after second run error = %v", err)
+	}
+	if len(summary.IncludedSourceIDs) != 0 {
+		t.Fatalf("compile summary IncludedSourceIDs = %#v, want empty", summary.IncludedSourceIDs)
+	}
+	if !containsString(summary.FailedSourceIDs, secondSources[0].ID) {
+		t.Fatalf("compile summary FailedSourceIDs = %#v, want to contain %q", summary.FailedSourceIDs, secondSources[0].ID)
+	}
+}
+
+func TestWorkspaceWikiScanFailureInvalidatesCompileSummary(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	files := newWorkspaceKnowledgeFiles(paths, workspace.ID)
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+	if err := files.WriteCompileSummary(WorkspaceKnowledgeCompileSummary{WorkspaceID: workspace.ID, IncludedSourceIDs: []string{"source:a"}}); err != nil {
+		t.Fatalf("WriteCompileSummary() error = %v", err)
+	}
+
+	runner := &workspaceWikiScanRunner{paths: paths, store: store}
+	if err := runner.writeScanRunFailure(ctx, WorkspaceWikiScanJob{WorkspaceID: workspace.ID, JobID: "job-a"}, fmt.Errorf("boom")); err != nil {
+		t.Fatalf("writeScanRunFailure() error = %v", err)
+	}
+
+	compileSummaryPath, err := files.CompileSummaryPath()
+	if err != nil {
+		t.Fatalf("CompileSummaryPath() error = %v", err)
+	}
+	if _, err := os.Stat(compileSummaryPath); !os.IsNotExist(err) {
+		t.Fatalf("Stat(compileSummaryPath) after failure error = %v, want not exist", err)
+	}
+}
+
 type panicWorkspaceKnowledgeExtractor struct{}
 
 func (panicWorkspaceKnowledgeExtractor) ExtractMarkdown(ctx context.Context, rawPath string) (PDFMarkdownPayload, error) {
 	panic("unexpected ExtractMarkdown call")
 }
 
-type stubWorkspaceKnowledgeLLM struct{}
-
-func (stubWorkspaceKnowledgeLLM) GenerateWorkspaceKnowledgeBySource(ctx context.Context, providerID, modelID int64, prompt string) (WorkspaceKnowledgeBySourcePayload, error) {
-	return WorkspaceKnowledgeBySourcePayload{}, nil
+type stubWorkspaceKnowledgeLLM struct {
+	payload     WorkspaceKnowledgeBySourcePayload
+	bySourceErr error
 }
 
-func (stubWorkspaceKnowledgeLLM) GenerateWorkspaceKnowledgeMarkdown(ctx context.Context, providerID, modelID int64, prompt string) (string, error) {
+func (s stubWorkspaceKnowledgeLLM) GenerateWorkspaceKnowledgeBySource(ctx context.Context, providerID, modelID int64, prompt string) (WorkspaceKnowledgeBySourcePayload, error) {
+	if s.bySourceErr != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, s.bySourceErr
+	}
+	return s.payload, nil
+}
+
+func (s stubWorkspaceKnowledgeLLM) GenerateWorkspaceKnowledgeMarkdown(ctx context.Context, providerID, modelID int64, prompt string) (string, error) {
 	return "", nil
 }
 
