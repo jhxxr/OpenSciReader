@@ -1,18 +1,33 @@
 package main
 
 type WorkspaceKnowledgeSource struct {
-	ID           string `json:"sourceId"`
-	WorkspaceID  string `json:"workspaceId"`
-	Title        string `json:"title"`
-	Slug         string `json:"slug"`
-	Kind         string `json:"kind"`
-	AbsolutePath string `json:"absolutePath"`
-	ContentHash  string `json:"contentHash"`
-	ExtractPath  string `json:"extractPath"`
-	DocumentID   string `json:"documentId"`
-	Status       string `json:"status"`
-	LastScanAt   string `json:"lastScanAt"`
-	LastError    string `json:"lastError"`
+	ID               string `json:"sourceId"`
+	WorkspaceID      string `json:"workspaceId"`
+	Title            string `json:"title"`
+	Slug             string `json:"slug"`
+	Kind             string `json:"kind"`
+	SourcePath       string `json:"sourcePath"`
+	MarkItDownPath   string `json:"markItDownPath"`
+	MarkItDownStatus string `json:"markItDownStatus"`
+	ExtractStatus    string `json:"extractStatus"`
+	LastIngestAt     string `json:"lastIngestAt"`
+	LastSuccessAt    string `json:"lastSuccessAt"`
+	LastError        string `json:"lastError"`
+	AbsolutePath     string `json:"absolutePath,omitempty"`
+	ContentHash      string `json:"contentHash"`
+	ExtractPath      string `json:"extractPath,omitempty"`
+	DocumentID       string `json:"documentId"`
+}
+
+type WorkspaceKnowledgeCompileSummary struct {
+	WorkspaceID       string   `json:"workspaceId"`
+	StartedAt         string   `json:"startedAt"`
+	FinishedAt        string   `json:"finishedAt"`
+	IncludedSourceIDs []string `json:"includedSourceIds"`
+	FailedSourceIDs   []string `json:"failedSourceIds"`
+	UpdatedWikiPaths  []string `json:"updatedWikiPaths"`
+	CompileDirty      bool     `json:"compileDirty"`
+	WikiDirty         bool     `json:"wikiDirty"`
 }
 
 type WorkspaceKnowledgeSourceRef struct {

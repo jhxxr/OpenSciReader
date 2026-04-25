@@ -1,11 +1,17 @@
 import type {
   WorkspaceKnowledgeClaim,
+  WorkspaceKnowledgeCompileSummary,
   WorkspaceKnowledgeEntity,
+  WorkspaceKnowledgeSource,
   WorkspaceKnowledgeSourceRef,
   WorkspaceKnowledgeTask,
 } from '../types/workspaceKnowledge';
 
 interface WailsWorkspaceKnowledgeApp {
+  ListWorkspaceKnowledgeSources: (workspaceId: string) => Promise<WorkspaceKnowledgeSource[]>;
+  GetWorkspaceKnowledgeCompileSummary: (
+    workspaceId: string
+  ) => Promise<WorkspaceKnowledgeCompileSummary>;
   ListWorkspaceKnowledgeEntities: (workspaceId: string) => Promise<WorkspaceKnowledgeEntity[]>;
   ListWorkspaceKnowledgeClaims: (workspaceId: string) => Promise<WorkspaceKnowledgeClaim[]>;
   ListWorkspaceKnowledgeTasks: (workspaceId: string) => Promise<WorkspaceKnowledgeTask[]>;
@@ -69,6 +75,22 @@ function getApp(): WailsWorkspaceKnowledgeApp | null {
 }
 
 export const workspaceKnowledgeApi = {
+  async listSources(workspaceId: string): Promise<WorkspaceKnowledgeSource[]> {
+    const app = getApp();
+    if (!app || workspaceId.trim() === '') {
+      return [];
+    }
+    return app.ListWorkspaceKnowledgeSources(workspaceId);
+  },
+
+  async getCompileSummary(workspaceId: string): Promise<WorkspaceKnowledgeCompileSummary | null> {
+    const app = getApp();
+    if (!app || workspaceId.trim() === '') {
+      return null;
+    }
+    return app.GetWorkspaceKnowledgeCompileSummary(workspaceId);
+  },
+
   async listEntities(workspaceId: string): Promise<WorkspaceKnowledgeEntity[]> {
     const app = getApp();
     if (!app || workspaceId.trim() === '') {

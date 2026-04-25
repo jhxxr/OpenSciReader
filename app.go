@@ -219,19 +219,30 @@ func (a *App) GetWorkspaceWikiPage(pageID string) (WorkspaceWikiPageContent, err
 }
 
 func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
-	pages, err := a.store.ListWorkspaceWikiPages(a.ctx, workspaceID)
-	if err != nil {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
 		return err
 	}
-	for _, page := range pages {
-		if strings.TrimSpace(page.MarkdownPath) == "" {
-			continue
-		}
-		if err := os.Remove(page.MarkdownPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove workspace wiki page file: %w", err)
-		}
+	if err := clearWorkspaceWikiBrowseSurface(a.store, files, workspaceID); err != nil {
+		return err
 	}
-	return a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID)
+	return files.DeleteCompiledArtifacts()
+}
+
+func (a *App) ListWorkspaceKnowledgeSources(workspaceID string) ([]WorkspaceKnowledgeSource, error) {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return nil, err
+	}
+	return files.ReadSources()
+}
+
+func (a *App) GetWorkspaceKnowledgeCompileSummary(workspaceID string) (WorkspaceKnowledgeCompileSummary, error) {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return WorkspaceKnowledgeCompileSummary{}, err
+	}
+	return files.ReadCompileSummary()
 }
 
 func (a *App) GetCollections(source string) ([]CollectionTree, error) {

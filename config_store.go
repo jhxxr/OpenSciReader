@@ -933,16 +933,37 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 	}
 
 	var existingDocumentID string
+	var primaryPDFPath string
 	if err := s.appDB.QueryRowContext(ctx, `
-		SELECT id
+		SELECT id, primary_pdf_path
 		FROM documents
 		WHERE id = ? AND workspace_id = ?
 		LIMIT 1;
-	`, trimmedDocumentID, trimmedWorkspaceID).Scan(&existingDocumentID); err != nil {
+	`, trimmedDocumentID, trimmedWorkspaceID).Scan(&existingDocumentID, &primaryPDFPath); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("document %s not found in workspace %s", trimmedDocumentID, trimmedWorkspaceID)
 		}
 		return fmt.Errorf("load document before delete: %w", err)
+	}
+
+	deletedDocumentKnownPaths, err := s.workspaceKnowledgeKnownPathsForDocument(ctx, paths, trimmedWorkspaceID, trimmedDocumentID, primaryPDFPath)
+	if err != nil {
+		return err
+	}
+
+	files := newWorkspaceKnowledgeFiles(paths, trimmedWorkspaceID)
+	manifest, err := files.ReadSources()
+	if err != nil {
+		return fmt.Errorf("read workspace knowledge sources before delete: %w", err)
+	}
+	remainingSources := make([]WorkspaceKnowledgeSource, 0, len(manifest))
+	deletedSources := make([]WorkspaceKnowledgeSource, 0)
+	for _, source := range manifest {
+		if strings.TrimSpace(source.DocumentID) == trimmedDocumentID || workspaceKnowledgeSourceMatchesDeletedDocumentPaths(source, deletedDocumentKnownPaths) {
+			deletedSources = append(deletedSources, source)
+			continue
+		}
+		remainingSources = append(remainingSources, source)
 	}
 
 	documentRoot := filepath.Join(paths.WorkspacesRootDir, trimmedWorkspaceID, "documents", trimmedDocumentID)
@@ -976,8 +997,8 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 
 	if _, err = tx.ExecContext(ctx, `
 		DELETE FROM workspace_wiki_pages
-		WHERE workspace_id = ? AND source_document_id = ?;
-	`, trimmedWorkspaceID, trimmedDocumentID); err != nil {
+		WHERE workspace_id = ?;
+	`, trimmedWorkspaceID); err != nil {
 		return fmt.Errorf("delete document wiki pages: %w", err)
 	}
 
@@ -1008,7 +1029,79 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit document delete transaction: %w", err)
 	}
+
+	if err := files.WriteSources(remainingSources); err != nil {
+		return fmt.Errorf("update workspace knowledge sources after delete: %w", err)
+	}
+	for _, source := range deletedSources {
+		if err := files.DeleteMarkItDown(source.Slug); err != nil {
+			return fmt.Errorf("delete workspace knowledge markdown for %s: %w", source.Slug, err)
+		}
+		if err := files.DeleteBySource(source.Slug); err != nil {
+			return fmt.Errorf("delete workspace knowledge by-source payload for %s: %w", source.Slug, err)
+		}
+	}
+	if err := files.DeleteCompiledArtifacts(); err != nil {
+		return fmt.Errorf("invalidate workspace compiled knowledge after document delete: %w", err)
+	}
 	return nil
+}
+
+func (s *configStore) workspaceKnowledgeKnownPathsForDocument(ctx context.Context, paths appPaths, workspaceID, documentID, primaryPDFPath string) (map[string]struct{}, error) {
+	knownPaths := make(map[string]struct{})
+	addWorkspaceKnowledgeKnownPath(knownPaths, primaryPDFPath)
+
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT absolute_path, relative_path
+		FROM document_assets
+		WHERE workspace_id = ? AND document_id = ?;
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(documentID))
+	if err != nil {
+		return nil, fmt.Errorf("list document assets before delete: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var absolutePath string
+		var relativePath string
+		if err := rows.Scan(&absolutePath, &relativePath); err != nil {
+			return nil, fmt.Errorf("scan document asset before delete: %w", err)
+		}
+		addWorkspaceKnowledgeKnownPath(knownPaths, absolutePath)
+		trimmedRelativePath := strings.TrimSpace(relativePath)
+		if trimmedRelativePath != "" {
+			assetPath := filepath.FromSlash(trimmedRelativePath)
+			if !filepath.IsAbs(assetPath) {
+				assetPath = filepath.Join(paths.RootDir, assetPath)
+			}
+			addWorkspaceKnowledgeKnownPath(knownPaths, assetPath)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate document assets before delete: %w", err)
+	}
+	return knownPaths, nil
+}
+
+func workspaceKnowledgeSourceMatchesDeletedDocumentPaths(source WorkspaceKnowledgeSource, knownPaths map[string]struct{}) bool {
+	for _, candidate := range []string{source.SourcePath, source.AbsolutePath} {
+		normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(candidate)
+		if normalizedPath == "" {
+			continue
+		}
+		if _, ok := knownPaths[normalizedPath]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func addWorkspaceKnowledgeKnownPath(knownPaths map[string]struct{}, path string) {
+	normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(path)
+	if normalizedPath == "" {
+		return
+	}
+	knownPaths[normalizedPath] = struct{}{}
 }
 
 func (s *configStore) ImportFiles(ctx context.Context, paths appPaths, input ImportFilesInput) (ImportFilesResult, error) {
@@ -1454,7 +1547,17 @@ func (s *configStore) ListWorkspaceWikiPages(ctx context.Context, workspaceID st
 		SELECT id, workspace_id, source_document_id, title, slug, kind, markdown_path, summary, created_at, updated_at
 		FROM workspace_wiki_pages
 		WHERE workspace_id = ?
-		ORDER BY CASE kind WHEN 'overview' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC, id DESC;
+		ORDER BY CASE kind
+			WHEN 'index' THEN 0
+			WHEN 'overview' THEN 1
+			WHEN 'open_questions' THEN 2
+			WHEN 'log' THEN 3
+			WHEN 'document' THEN 4
+			WHEN 'concept' THEN 5
+			ELSE 6
+		END,
+		title COLLATE NOCASE ASC,
+		id ASC;
 	`, strings.TrimSpace(workspaceID))
 	if err != nil {
 		return nil, fmt.Errorf("list workspace wiki pages: %w", err)

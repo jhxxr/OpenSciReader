@@ -189,6 +189,15 @@ type WorkspaceKnowledgeEvidenceHit struct {
 	SourceRefs []WorkspaceKnowledgeSourceRef `json:"sourceRefs"`
 }
 
+type WorkspaceKnowledgeProcessingStatus string
+
+const (
+	WorkspaceKnowledgeProcessingPending WorkspaceKnowledgeProcessingStatus = "pending"
+	WorkspaceKnowledgeProcessingRunning WorkspaceKnowledgeProcessingStatus = "running"
+	WorkspaceKnowledgeProcessingReady   WorkspaceKnowledgeProcessingStatus = "ready"
+	WorkspaceKnowledgeProcessingFailed  WorkspaceKnowledgeProcessingStatus = "failed"
+)
+
 type WorkspaceKnowledgeQueryInput struct {
 	WorkspaceID string `json:"workspaceId"`
 	ProviderID  int64  `json:"providerId"`
@@ -263,8 +272,12 @@ const (
 type WorkspaceWikiPageKind string
 
 const (
-	WorkspaceWikiPageOverview WorkspaceWikiPageKind = "overview"
-	WorkspaceWikiPageDocument WorkspaceWikiPageKind = "document"
+	WorkspaceWikiPageIndex         WorkspaceWikiPageKind = "index"
+	WorkspaceWikiPageOverview      WorkspaceWikiPageKind = "overview"
+	WorkspaceWikiPageOpenQuestions WorkspaceWikiPageKind = "open_questions"
+	WorkspaceWikiPageLog           WorkspaceWikiPageKind = "log"
+	WorkspaceWikiPageDocument      WorkspaceWikiPageKind = "document"
+	WorkspaceWikiPageConcept       WorkspaceWikiPageKind = "concept"
 )
 
 type WorkspaceWikiScanStartInput struct {

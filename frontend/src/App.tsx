@@ -3,6 +3,7 @@ import { BookOpen, FileText, Home, Plus, Settings2, Sparkles, Trash2, Wand2, X }
 import './App.css';
 import { configApi } from './api/config';
 import { workspaceApi } from './api/workspace';
+import { workspaceKnowledgeApi } from './api/workspaceKnowledge';
 import { workspaceWikiApi } from './api/workspaceWiki';
 import { ModelDiscoveryModal } from './components/ModelDiscoveryModal';
 import { HomePage } from './components/HomePage';
@@ -37,6 +38,7 @@ import {
   type ProviderUpsertInput,
 } from './types/config';
 import type { WorkspaceWikiPage, WorkspaceWikiPageContent, WorkspaceWikiScanJob } from './types/workspaceWiki';
+import type { WorkspaceKnowledgeCompileSummary, WorkspaceKnowledgeSource } from './types/workspaceKnowledge';
 
 const EMPTY_LLM_FORM: ProviderUpsertInput = {
   name: '',
@@ -153,6 +155,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
   unsubscribe?: (() => void) | null;
   wikiScanProviderId: number;
   wikiScanModelId: number;
+  sources: WorkspaceKnowledgeSource[];
+  compileSummary: WorkspaceKnowledgeCompileSummary | null;
 }>>({});
 
   useEffect(() => {
@@ -270,12 +274,16 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
         unsubscribe: current[workspaceId]?.unsubscribe ?? null,
         wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
         wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
+        sources: current[workspaceId]?.sources ?? [],
+        compileSummary: current[workspaceId]?.compileSummary ?? null,
       },
     }));
     try {
-      const [pages, jobs] = await Promise.all([
+      const [pages, jobs, sources, compileSummary] = await Promise.all([
         workspaceWikiApi.listPages(workspaceId),
         workspaceWikiApi.listJobs(),
+        workspaceKnowledgeApi.listSources(workspaceId),
+        workspaceKnowledgeApi.getCompileSummary(workspaceId),
       ]);
       const activeJob = jobs.find((job) => job.workspaceId === workspaceId && (job.status === 'queued' || job.status === 'running')) ?? null;
       const selectedPageId = currentSelectedPageId(workspaceId, pages, workspaceTabWiki);
@@ -304,6 +312,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
           unsubscribe: current[workspaceId]?.unsubscribe ?? null,
           wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? wikiScanProviderId,
           wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? wikiScanModelId,
+          sources,
+          compileSummary,
         },
       }));
       if (selectedPageId) {
@@ -320,13 +330,15 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
           wikiError: null,
           isStarting: current[workspaceId]?.isStarting ?? false,
           isCancelling: current[workspaceId]?.isCancelling ?? false,
-          isDeleting: current[workspaceId]?.isDeleting ?? false,
-          unsubscribe: current[workspaceId]?.unsubscribe ?? null,
-          wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
-          wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
-        },
-      }));
-      }
+           isDeleting: current[workspaceId]?.isDeleting ?? false,
+           unsubscribe: current[workspaceId]?.unsubscribe ?? null,
+           wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
+           wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
+           sources: current[workspaceId]?.sources ?? sources,
+           compileSummary: current[workspaceId]?.compileSummary ?? compileSummary,
+         },
+       }));
+       }
     } catch (error) {
       setWorkspaceTabWiki((current) => ({
         ...current,
@@ -344,6 +356,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
           unsubscribe: current[workspaceId]?.unsubscribe ?? null,
           wikiScanProviderId: current[workspaceId]?.wikiScanProviderId ?? 0,
           wikiScanModelId: current[workspaceId]?.wikiScanModelId ?? 0,
+          sources: current[workspaceId]?.sources ?? [],
+          compileSummary: current[workspaceId]?.compileSummary ?? null,
         },
       }));
     }
@@ -728,6 +742,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
                   isDeletingWikiPages={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.isDeleting ?? false : false}
                   wikiScanProviderId={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.wikiScanProviderId ?? 0 : 0}
                   wikiScanModelId={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.wikiScanModelId ?? 0 : 0}
+                  wikiSources={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.sources ?? [] : []}
+                  compileSummary={tab.workspaceId ? workspaceTabWiki[tab.workspaceId]?.compileSummary ?? null : null}
                   onImportFiles={async () => {
                     if (!tab.workspaceId) {
                       return;
@@ -795,11 +811,13 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
                           isStarting: false,
                           isCancelling: false,
                           isDeleting: false,
-                          unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
-                          wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
-                          wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
-                        },
-                      }));
+                           unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
+                           wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                           wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
+                           sources: current[tab.workspaceId!]?.sources ?? [],
+                           compileSummary: current[tab.workspaceId!]?.compileSummary ?? null,
+                         },
+                       }));
                       return;
                     }
                     setWorkspaceTabWiki((current) => ({
@@ -818,6 +836,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
                         unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? null,
                         wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
                         wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
+                        sources: current[tab.workspaceId!]?.sources ?? [],
+                        compileSummary: current[tab.workspaceId!]?.compileSummary ?? null,
                       },
                     }));
                     const job = await workspaceWikiApi.start({ workspaceId: tab.workspaceId, providerId, modelId });
@@ -835,11 +855,13 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
                           isStarting: false,
                           isCancelling: false,
                           isDeleting: current[tab.workspaceId!]?.isDeleting ?? false,
-                          unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? unsubscribe,
-                          wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
-                          wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
-                        },
-                      }));
+                           unsubscribe: current[tab.workspaceId!]?.unsubscribe ?? unsubscribe,
+                           wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
+                           wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
+                           sources: current[tab.workspaceId!]?.sources ?? [],
+                           compileSummary: current[tab.workspaceId!]?.compileSummary ?? null,
+                         },
+                       }));
                       if (event.status.status === 'completed' || event.status.status === 'failed' || event.status.status === 'cancelled') {
                         unsubscribe();
                         void ensureWorkspaceTabWiki(tab.workspaceId!);
@@ -861,6 +883,8 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
                         unsubscribe,
                         wikiScanProviderId: current[tab.workspaceId!]?.wikiScanProviderId ?? 0,
                         wikiScanModelId: current[tab.workspaceId!]?.wikiScanModelId ?? 0,
+                        sources: current[tab.workspaceId!]?.sources ?? [],
+                        compileSummary: current[tab.workspaceId!]?.compileSummary ?? null,
                       },
                     }));
                   }}

@@ -41,6 +41,8 @@ export function GetPDFTranslateRuntimeStatus():Promise<main.PDFTranslateRuntimeC
 
 export function GetPDFTranslateStatus(arg1:string):Promise<translator.JobSnapshot>;
 
+export function GetWorkspaceKnowledgeCompileSummary(arg1:string):Promise<main.WorkspaceKnowledgeCompileSummary>;
+
 export function GetWorkspaceWikiPage(arg1:string):Promise<main.WorkspaceWikiPageContent>;
 
 export function GetWorkspaceWikiScanJob(arg1:string):Promise<main.WorkspaceWikiScanJob>;
@@ -58,6 +60,8 @@ export function ListDocuments(arg1:string):Promise<Array<main.DocumentRecord>>;
 export function ListPDFTranslateJobs():Promise<Array<translator.JobSnapshot>>;
 
 export function ListReaderNotes(arg1:string,arg2:string,arg3:string):Promise<Array<main.ReaderNoteEntry>>;
+
+export function ListWorkspaceKnowledgeSources(arg1:string):Promise<Array<main.WorkspaceKnowledgeSource>>;
 
 export function ListWorkspaceWikiPages(arg1:string):Promise<Array<main.WorkspaceWikiPage>>;
 

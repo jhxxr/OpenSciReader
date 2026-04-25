@@ -5,7 +5,26 @@ export type WorkspaceWikiScanJobStatus =
   | 'failed'
   | 'cancelled';
 
-export type WorkspaceWikiPageKind = 'overview' | 'document';
+export type WorkspaceWikiPageKind = 'index' | 'overview' | 'open_questions' | 'log' | 'document' | 'concept';
+
+export function workspaceWikiPageKindLabel(kind: WorkspaceWikiPageKind): string {
+  switch (kind) {
+    case 'index':
+      return 'Index';
+    case 'overview':
+      return 'Overview';
+    case 'open_questions':
+      return 'Open Questions';
+    case 'log':
+      return 'Log';
+    case 'document':
+      return 'Document';
+    case 'concept':
+      return 'Concept';
+    default:
+      return kind;
+  }
+}
 
 export interface WorkspaceWikiScanStartInput {
   workspaceId: string;

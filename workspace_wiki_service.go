@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type workspaceKnowledgeExtractor interface {
@@ -226,6 +227,11 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		return err
 	}
 	existingByID := workspaceKnowledgeSourcesByID(manifest)
+	for index := range sources {
+		if existingSource, ok := existingByID[sources[index].ID]; ok {
+			sources[index] = mergeWorkspaceKnowledgeSourceState(existingSource, sources[index])
+		}
+	}
 
 	fullScan := strings.TrimSpace(job.DocumentID) == ""
 	if fullScan {
@@ -234,9 +240,16 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		}
 	}
 
+	manifest = mergeWorkspaceKnowledgeSources(manifest, sources, fullScan)
+	if err := files.WriteSources(manifest); err != nil {
+		return err
+	}
+	manifestByID := workspaceKnowledgeSourcesByID(manifest)
+
 	failureCount := 0
 	skippedCount := 0
 	sourceIDs := make([]string, 0, len(sources))
+	failedSourceIDs := make([]string, 0)
 	for index := range sources {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -255,6 +268,9 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 			if skip {
 				skippedCount++
 				sources[index] = mergeSkippedWorkspaceKnowledgeSource(existingSource, sources[index])
+				if err := persistWorkspaceKnowledgeSource(files, manifestByID, sources[index]); err != nil {
+					return err
+				}
 				job.ProcessedItems++
 				job.OverallProgress = workspaceWikiScanProgress(job.ProcessedItems, job.TotalItems)
 				job.Message = fmt.Sprintf("skipped %s", sources[index].Title)
@@ -264,13 +280,20 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		}
 		if err := r.processSource(ctx, workspace, job, files, &sources[index]); err != nil {
 			failureCount++
-			sources[index].Status = "error"
-			sources[index].LastError = err.Error()
-			sources[index].LastScanAt = nowRFC3339()
+			failedSourceIDs = append(failedSourceIDs, sources[index].ID)
+			if err := files.DeleteBySource(sources[index].Slug); err != nil {
+				return err
+			}
+			if err := persistWorkspaceKnowledgeSource(files, manifestByID, sources[index]); err != nil {
+				return err
+			}
 			job.FailedItems = failureCount
 			job.Error = err.Error()
 			job.Message = err.Error()
 		} else {
+			if err := persistWorkspaceKnowledgeSource(files, manifestByID, sources[index]); err != nil {
+				return err
+			}
 			job.Error = ""
 		}
 		job.ProcessedItems++
@@ -286,14 +309,22 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := CompileWorkspaceKnowledge(files, workspace.Name); err != nil {
-		return err
-	}
-	pages, err := buildWorkspaceWikiPages(workspace, files, manifest)
+	previousWikiPaths, err := workspaceKnowledgeCurrentWikiPaths(files)
 	if err != nil {
 		return err
 	}
-	if err := r.store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages); err != nil {
+	snapshot, err := CompileWorkspaceKnowledge(files, workspace.Name)
+	if err != nil {
+		return err
+	}
+	compileSummary, err := buildWorkspaceKnowledgeCompileSummary(files, workspace.ID, strings.TrimSpace(job.StartedAt), snapshot, failedSourceIDs, previousWikiPaths)
+	if err != nil {
+		return err
+	}
+	if err := files.WriteCompileSummary(compileSummary); err != nil {
+		return err
+	}
+	if err := replaceWorkspaceWikiPagesFromGeneratedFiles(ctx, r.store, workspace, files, snapshot); err != nil {
 		return err
 	}
 
@@ -306,6 +337,212 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		SourceIDs:   sourceIDs,
 		Message:     workspaceKnowledgeScanMessage(len(sources), failureCount, skippedCount),
 	})
+}
+
+func replaceWorkspaceWikiPagesFromGeneratedFiles(ctx context.Context, store *configStore, workspace Workspace, files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) error {
+	if store == nil {
+		return fmt.Errorf("config store is unavailable")
+	}
+	pages, err := buildWorkspaceWikiPagesFromGeneratedFiles(workspace, files, snapshot)
+	if err != nil {
+		return err
+	}
+	return store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages)
+}
+
+func clearWorkspaceWikiBrowseSurface(store *configStore, files workspaceKnowledgeFiles, workspaceID string) error {
+	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+
+	paths := make([]string, 0, 4)
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, indexPath)
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, overviewPath)
+
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, openQuestionsPath)
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, logPath)
+
+	for _, path := range paths {
+		if err := removeWorkspaceKnowledgeFile(path); err != nil {
+			return err
+		}
+	}
+
+	docsDir, err := files.docsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(docsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	conceptsDir, err := files.conceptsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(conceptsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	if store == nil {
+		return nil
+	}
+
+	cleanupCtx := context.Background()
+	pages, err := store.ListWorkspaceWikiPages(cleanupCtx, workspaceID)
+	if err != nil {
+		return err
+	}
+	for _, page := range pages {
+		if err := removeWorkspaceKnowledgeFile(page.MarkdownPath); err != nil {
+			return fmt.Errorf("remove workspace wiki page file: %w", err)
+		}
+	}
+	return store.DeleteWorkspaceWikiPagesByWorkspace(cleanupCtx, workspaceID)
+}
+
+func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) ([]WorkspaceWikiPage, error) {
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	indexPage, err := newWorkspaceWikiPageRecord(workspace, indexPath, WorkspaceWikiPageIndex, "index", "")
+	if err != nil {
+		return nil, err
+	}
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return nil, err
+	}
+	overviewPage, err := newWorkspaceWikiPageRecord(workspace, overviewPath, WorkspaceWikiPageOverview, "overview", "")
+	if err != nil {
+		return nil, err
+	}
+
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return nil, err
+	}
+	openQuestionsPage, err := newWorkspaceWikiPageRecord(workspace, openQuestionsPath, WorkspaceWikiPageOpenQuestions, "open-questions", "")
+	if err != nil {
+		return nil, err
+	}
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return nil, err
+	}
+	logPage, err := newWorkspaceWikiPageRecord(workspace, logPath, WorkspaceWikiPageLog, "log", "")
+	if err != nil {
+		return nil, err
+	}
+
+	pages := make([]WorkspaceWikiPage, 0, len(snapshot.Sources)+len(snapshot.Entities)+4)
+	pages = append(pages, indexPage, overviewPage, openQuestionsPage, logPage)
+	for _, source := range snapshot.Sources {
+		documentPath, err := files.DocumentWikiPath(source.Slug)
+		if err != nil {
+			return nil, err
+		}
+		page, err := newWorkspaceWikiPageRecord(workspace, documentPath, WorkspaceWikiPageDocument, source.Slug, strings.TrimSpace(source.DocumentID))
+		if err != nil {
+			return nil, err
+		}
+		page.Title = firstNonEmptyText(strings.TrimSpace(source.Title), strings.TrimSpace(source.Slug))
+		pages = append(pages, page)
+	}
+
+	conceptTitlesBySlug := make(map[string]string, len(snapshot.Entities))
+	for entityID, conceptSlug := range buildConceptSlugs(snapshot.Entities) {
+		conceptTitlesBySlug[conceptSlug] = workspaceKnowledgeReadableTitle(conceptSlug)
+		for _, entity := range snapshot.Entities {
+			if entity.ID != entityID {
+				continue
+			}
+			conceptTitlesBySlug[conceptSlug] = firstNonEmptyText(strings.TrimSpace(entity.Title), conceptTitlesBySlug[conceptSlug])
+			break
+		}
+	}
+	conceptSlugs := make([]string, 0, len(conceptTitlesBySlug))
+	for conceptSlug := range conceptTitlesBySlug {
+		conceptSlugs = append(conceptSlugs, conceptSlug)
+	}
+	sort.Strings(conceptSlugs)
+	for _, conceptSlug := range conceptSlugs {
+		conceptPath, err := files.ConceptWikiPath(conceptSlug)
+		if err != nil {
+			return nil, err
+		}
+		page, err := newWorkspaceWikiPageRecord(workspace, conceptPath, WorkspaceWikiPageConcept, conceptSlug, "")
+		if err != nil {
+			return nil, err
+		}
+		page.Title = conceptTitlesBySlug[conceptSlug]
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+func newWorkspaceWikiPageRecord(workspace Workspace, markdownPath string, kind WorkspaceWikiPageKind, slug, sourceDocumentID string) (WorkspaceWikiPage, error) {
+	info, err := os.Stat(markdownPath)
+	if err != nil {
+		return WorkspaceWikiPage{}, fmt.Errorf("stat generated workspace wiki page %s: %w", markdownPath, err)
+	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		return WorkspaceWikiPage{}, fmt.Errorf("read generated workspace wiki page %s: %w", markdownPath, err)
+	}
+	updatedAt := info.ModTime().UTC().Format(time.RFC3339)
+	title := workspaceWikiPageTitle(kind, slug)
+	return WorkspaceWikiPage{
+		ID:               fmt.Sprintf("%s:%s:%s", strings.TrimSpace(workspace.ID), kind, strings.TrimSpace(slug)),
+		WorkspaceID:      strings.TrimSpace(workspace.ID),
+		SourceDocumentID: strings.TrimSpace(sourceDocumentID),
+		Title:            title,
+		Slug:             strings.TrimSpace(slug),
+		Kind:             kind,
+		MarkdownPath:     markdownPath,
+		Summary:          firstWorkspaceKnowledgeMarkdownLine(string(markdown)),
+		CreatedAt:        updatedAt,
+		UpdatedAt:        updatedAt,
+	}, nil
+}
+
+func workspaceWikiPageTitle(kind WorkspaceWikiPageKind, slug string) string {
+	trimmedSlug := strings.TrimSpace(slug)
+	switch kind {
+	case WorkspaceWikiPageIndex:
+		return "Index"
+	case WorkspaceWikiPageOverview:
+		return "Overview"
+	case WorkspaceWikiPageOpenQuestions:
+		return "Open Questions"
+	case WorkspaceWikiPageLog:
+		return "Log"
+	case WorkspaceWikiPageConcept:
+		return workspaceKnowledgeReadableTitle(trimmedSlug)
+	default:
+		return trimmedSlug
+	}
 }
 
 func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace Workspace, documentID string, files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeSource, error) {
@@ -336,10 +573,7 @@ func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace 
 			return walkErr
 		}
 		if entry.IsDir() {
-			switch normalizeWorkspaceKnowledgeAbsolutePath(path) {
-			case normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "raw")),
-				normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "schema")),
-				normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "wiki")):
+			if isInternalWorkspaceKnowledgeDir(workspaceRoot, path) {
 				return fs.SkipDir
 			}
 			return nil
@@ -394,47 +628,80 @@ func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace 
 			return nil, err
 		}
 		sources = append(sources, WorkspaceKnowledgeSource{
-			ID:           "source:" + slug,
-			WorkspaceID:  workspace.ID,
-			Title:        candidate.title,
-			Slug:         slug,
-			Kind:         candidate.kind,
-			AbsolutePath: candidate.absolutePath,
-			ContentHash:  candidate.contentHash,
-			ExtractPath:  extractPath,
-			DocumentID:   candidate.documentID,
-			Status:       "pending",
+			ID:               "source:" + slug,
+			WorkspaceID:      workspace.ID,
+			Title:            candidate.title,
+			Slug:             slug,
+			Kind:             candidate.kind,
+			SourcePath:       candidate.absolutePath,
+			MarkItDownPath:   extractPath,
+			MarkItDownStatus: string(WorkspaceKnowledgeProcessingPending),
+			ExtractStatus:    string(WorkspaceKnowledgeProcessingPending),
+			AbsolutePath:     candidate.absolutePath,
+			ContentHash:      candidate.contentHash,
+			ExtractPath:      extractPath,
+			DocumentID:       candidate.documentID,
 		})
 	}
 	return sources, nil
 }
 
 func (r *workspaceWikiScanRunner) processSource(ctx context.Context, workspace Workspace, job WorkspaceWikiScanJob, files workspaceKnowledgeFiles, source *WorkspaceKnowledgeSource) error {
-	markdown, err := r.extractSourceMarkdown(ctx, *source)
-	if err != nil {
+	source.LastIngestAt = nowRFC3339()
+	source.LastError = ""
+	source.MarkItDownStatus = string(WorkspaceKnowledgeProcessingRunning)
+	source.ExtractStatus = string(WorkspaceKnowledgeProcessingPending)
+	if err := updateWorkspaceKnowledgeSourceManifest(files, *source); err != nil {
 		return err
 	}
-	if err := writeWorkspaceKnowledgeMarkdown(source.ExtractPath, markdown); err != nil {
+
+	markdown, err := r.extractSourceMarkdown(ctx, *source)
+	if err != nil {
+		source.MarkItDownStatus = string(WorkspaceKnowledgeProcessingFailed)
+		source.ExtractStatus = string(WorkspaceKnowledgeProcessingPending)
+		source.LastError = err.Error()
+		return err
+	}
+	markItDownPath := firstNonEmptyText(strings.TrimSpace(source.MarkItDownPath), strings.TrimSpace(source.ExtractPath))
+	source.MarkItDownPath = markItDownPath
+	source.ExtractPath = markItDownPath
+	if err := writeWorkspaceKnowledgeMarkdown(markItDownPath, markdown); err != nil {
+		source.MarkItDownStatus = string(WorkspaceKnowledgeProcessingFailed)
+		source.ExtractStatus = string(WorkspaceKnowledgeProcessingPending)
+		source.LastError = err.Error()
+		return err
+	}
+	source.MarkItDownStatus = string(WorkspaceKnowledgeProcessingReady)
+	source.ExtractStatus = string(WorkspaceKnowledgeProcessingRunning)
+	source.LastError = ""
+	if err := updateWorkspaceKnowledgeSourceManifest(files, *source); err != nil {
 		return err
 	}
 
 	prompt, err := buildWorkspaceKnowledgeBySourcePromptWithinBudget(workspace, *source, markdown, r.workspaceKnowledgePromptCharBudget(ctx, job.ModelID))
 	if err != nil {
+		source.ExtractStatus = string(WorkspaceKnowledgeProcessingFailed)
+		source.LastError = err.Error()
 		return err
 	}
 	payload, err := r.knowledgeLLM.GenerateWorkspaceKnowledgeBySource(ctx, job.ProviderID, job.ModelID, prompt)
 	if err != nil {
+		source.ExtractStatus = string(WorkspaceKnowledgeProcessingFailed)
+		source.LastError = fmt.Sprintf("generate by-source knowledge for %s: %v", source.Title, err)
 		return fmt.Errorf("generate by-source knowledge for %s: %w", source.Title, err)
 	}
 
 	payload = normalizeWorkspaceKnowledgeBySourcePayload(*source, payload)
 	if err := files.WriteBySource(source.Slug, payload); err != nil {
+		source.ExtractStatus = string(WorkspaceKnowledgeProcessingFailed)
+		source.LastError = err.Error()
 		return err
 	}
 
-	source.Status = "ready"
+	source.MarkItDownStatus = string(WorkspaceKnowledgeProcessingReady)
+	source.ExtractStatus = string(WorkspaceKnowledgeProcessingReady)
 	source.LastError = ""
-	source.LastScanAt = nowRFC3339()
+	source.LastSuccessAt = nowRFC3339()
 	return nil
 }
 
@@ -487,7 +754,15 @@ func (r *workspaceWikiScanRunner) removeStaleSourceArtifacts(files workspaceKnow
 	if err != nil {
 		return err
 	}
-	return removeWorkspaceKnowledgeArtifactsNotInSet(bySourceDir, ".json", currentSlugs)
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(bySourceDir, ".json", currentSlugs); err != nil {
+		return err
+	}
+
+	legacyBySourceDir, err := files.legacyBySourceDir()
+	if err != nil {
+		return err
+	}
+	return removeWorkspaceKnowledgeArtifactsNotInSet(legacyBySourceDir, ".json", currentSlugs)
 }
 
 func (r *workspaceWikiScanRunner) saveJob(ctx context.Context, job WorkspaceWikiScanJob, status WorkspaceWikiScanJobStatus, stage, message string, finished bool) WorkspaceWikiScanJob {
@@ -535,10 +810,10 @@ func (r *workspaceWikiScanRunner) shouldSkipSource(files workspaceKnowledgeFiles
 	if existingSource.ContentHash != currentSource.ContentHash {
 		return false, nil
 	}
-	if existingSource.Status != "ready" {
+	if existingSource.MarkItDownStatus != string(WorkspaceKnowledgeProcessingReady) || existingSource.ExtractStatus != string(WorkspaceKnowledgeProcessingReady) {
 		return false, nil
 	}
-	if !workspaceKnowledgeFileExists(firstNonEmptyText(currentSource.ExtractPath, existingSource.ExtractPath)) {
+	if !workspaceKnowledgeFileExists(firstNonEmptyText(currentSource.MarkItDownPath, existingSource.MarkItDownPath, currentSource.ExtractPath, existingSource.ExtractPath)) {
 		return false, nil
 	}
 
@@ -582,6 +857,12 @@ func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job W
 	if err := files.EnsureLayout(); err != nil {
 		return err
 	}
+	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
+		return err
+	}
+	if err := files.DeleteCompiledArtifacts(); err != nil {
+		return err
+	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
 		ID:          strings.TrimSpace(job.JobID),
 		WorkspaceID: workspaceID,
@@ -599,6 +880,12 @@ func (r *workspaceWikiScanRunner) writeScanRunCancelled(job WorkspaceWikiScanJob
 	}
 	files := newWorkspaceKnowledgeFiles(r.paths, workspaceID)
 	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
+		return err
+	}
+	if err := files.DeleteCompiledArtifacts(); err != nil {
 		return err
 	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
@@ -663,11 +950,162 @@ func mergeSkippedWorkspaceKnowledgeSource(existingSource, currentSource Workspac
 	existingSource.Title = currentSource.Title
 	existingSource.Slug = currentSource.Slug
 	existingSource.Kind = currentSource.Kind
+	existingSource.SourcePath = currentSource.SourcePath
+	existingSource.MarkItDownPath = firstNonEmptyText(currentSource.MarkItDownPath, existingSource.MarkItDownPath)
 	existingSource.AbsolutePath = currentSource.AbsolutePath
 	existingSource.ContentHash = currentSource.ContentHash
 	existingSource.ExtractPath = currentSource.ExtractPath
 	existingSource.DocumentID = currentSource.DocumentID
 	return existingSource
+}
+
+func mergeWorkspaceKnowledgeSourceState(existingSource, currentSource WorkspaceKnowledgeSource) WorkspaceKnowledgeSource {
+	currentSource.MarkItDownPath = firstNonEmptyText(currentSource.MarkItDownPath, existingSource.MarkItDownPath)
+	currentSource.MarkItDownStatus = firstNonEmptyText(existingSource.MarkItDownStatus, currentSource.MarkItDownStatus)
+	currentSource.ExtractStatus = firstNonEmptyText(existingSource.ExtractStatus, currentSource.ExtractStatus)
+	currentSource.ExtractPath = firstNonEmptyText(currentSource.ExtractPath, existingSource.ExtractPath)
+	currentSource.LastIngestAt = existingSource.LastIngestAt
+	currentSource.LastSuccessAt = existingSource.LastSuccessAt
+	currentSource.LastError = firstNonEmptyText(existingSource.LastError, currentSource.LastError)
+	return currentSource
+}
+
+func persistWorkspaceKnowledgeSource(files workspaceKnowledgeFiles, manifestByID map[string]WorkspaceKnowledgeSource, source WorkspaceKnowledgeSource) error {
+	manifestByID[source.ID] = source
+	manifest := make([]WorkspaceKnowledgeSource, 0, len(manifestByID))
+	for _, item := range manifestByID {
+		manifest = append(manifest, item)
+	}
+	sort.Slice(manifest, func(i, j int) bool {
+		return lessSource(manifest[i], manifest[j])
+	})
+	return files.WriteSources(manifest)
+}
+
+func updateWorkspaceKnowledgeSourceManifest(files workspaceKnowledgeFiles, source WorkspaceKnowledgeSource) error {
+	sources, err := files.ReadSources()
+	if err != nil {
+		return err
+	}
+	return files.WriteSources(mergeWorkspaceKnowledgeSources(sources, []WorkspaceKnowledgeSource{source}, false))
+}
+
+func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, workspaceID, startedAt string, snapshot WorkspaceKnowledgeSnapshot, failedSourceIDs []string, previousWikiPaths []string) (WorkspaceKnowledgeCompileSummary, error) {
+	updatedWikiPaths, err := workspaceKnowledgeUpdatedWikiPaths(files, snapshot, previousWikiPaths)
+	if err != nil {
+		return WorkspaceKnowledgeCompileSummary{}, err
+	}
+	includedSourceIDs := make([]string, 0, len(snapshot.Sources))
+	for _, source := range snapshot.Sources {
+		includedSourceIDs = append(includedSourceIDs, source.ID)
+	}
+	dirty := len(failedSourceIDs) > 0
+
+	return WorkspaceKnowledgeCompileSummary{
+		WorkspaceID:       strings.TrimSpace(workspaceID),
+		StartedAt:         firstNonEmptyText(strings.TrimSpace(startedAt), nowRFC3339()),
+		FinishedAt:        nowRFC3339(),
+		IncludedSourceIDs: includedSourceIDs,
+		FailedSourceIDs:   append([]string(nil), failedSourceIDs...),
+		UpdatedWikiPaths:  updatedWikiPaths,
+		CompileDirty:      dirty,
+		WikiDirty:         dirty,
+	}, nil
+}
+
+func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot, previousWikiPaths []string) ([]string, error) {
+	paths := make([]string, 0, len(snapshot.Sources)+len(snapshot.Entities)+4+len(previousWikiPaths))
+	seen := make(map[string]struct{}, len(previousWikiPaths)+len(snapshot.Sources)+len(snapshot.Entities)+4)
+	for _, path := range previousWikiPaths {
+		trimmedPath := strings.TrimSpace(path)
+		if trimmedPath == "" {
+			continue
+		}
+		if _, ok := seen[trimmedPath]; ok {
+			continue
+		}
+		seen[trimmedPath] = struct{}{}
+		paths = append(paths, trimmedPath)
+	}
+
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, indexPath)
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, overviewPath)
+
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, openQuestionsPath)
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, logPath)
+
+	for _, source := range snapshot.Sources {
+		documentPath, err := files.DocumentWikiPath(source.Slug)
+		if err != nil {
+			return nil, err
+		}
+		paths, seen = appendWorkspaceKnowledgePath(paths, seen, documentPath)
+	}
+
+	for _, conceptSlug := range buildConceptSlugs(snapshot.Entities) {
+		conceptPath, err := files.ConceptWikiPath(conceptSlug)
+		if err != nil {
+			return nil, err
+		}
+		paths, seen = appendWorkspaceKnowledgePath(paths, seen, conceptPath)
+	}
+
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func workspaceKnowledgeCurrentWikiPaths(files workspaceKnowledgeFiles) ([]string, error) {
+	wikiDir, err := files.wikiDir()
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0)
+	err = filepath.WalkDir(wikiDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk workspace knowledge wiki paths: %w", err)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func appendWorkspaceKnowledgePath(paths []string, seen map[string]struct{}, path string) ([]string, map[string]struct{}) {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return paths, seen
+	}
+	if _, ok := seen[trimmedPath]; ok {
+		return paths, seen
+	}
+	seen[trimmedPath] = struct{}{}
+	return append(paths, trimmedPath), seen
 }
 
 func normalizeWorkspaceKnowledgeBySourcePayload(source WorkspaceKnowledgeSource, payload WorkspaceKnowledgeBySourcePayload) WorkspaceKnowledgeBySourcePayload {
@@ -754,6 +1192,16 @@ func workspaceKnowledgeSourceKind(path string) string {
 	default:
 		return ""
 	}
+}
+
+func isInternalWorkspaceKnowledgeDir(workspaceRoot, path string) bool {
+	normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(path)
+	for _, dirName := range []string{"raw", "schema", "sources", "inputs", "state", "wiki"} {
+		if normalizedPath == normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, dirName)) {
+			return true
+		}
+	}
+	return false
 }
 
 func workspaceKnowledgeStableSourceKey(workspaceRoot string, candidate workspaceKnowledgeScanCandidate) (string, error) {

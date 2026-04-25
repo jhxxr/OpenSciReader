@@ -700,6 +700,74 @@ export namespace main {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	export class WorkspaceKnowledgeCompileSummary {
+	    workspaceId: string;
+	    startedAt: string;
+	    finishedAt: string;
+	    includedSourceIds: string[];
+	    failedSourceIds: string[];
+	    updatedWikiPaths: string[];
+	    compileDirty: boolean;
+	    wikiDirty: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeCompileSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspaceId = source["workspaceId"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	        this.includedSourceIds = source["includedSourceIds"];
+	        this.failedSourceIds = source["failedSourceIds"];
+	        this.updatedWikiPaths = source["updatedWikiPaths"];
+	        this.compileDirty = source["compileDirty"];
+	        this.wikiDirty = source["wikiDirty"];
+	    }
+	}
+	export class WorkspaceKnowledgeSource {
+	    sourceId: string;
+	    workspaceId: string;
+	    title: string;
+	    slug: string;
+	    kind: string;
+	    sourcePath: string;
+	    markItDownPath: string;
+	    markItDownStatus: string;
+	    extractStatus: string;
+	    lastIngestAt: string;
+	    lastSuccessAt: string;
+	    lastError: string;
+	    absolutePath?: string;
+	    contentHash: string;
+	    extractPath?: string;
+	    documentId: string;
+
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeSource(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceId = source["sourceId"];
+	        this.workspaceId = source["workspaceId"];
+	        this.title = source["title"];
+	        this.slug = source["slug"];
+	        this.kind = source["kind"];
+	        this.sourcePath = source["sourcePath"];
+	        this.markItDownPath = source["markItDownPath"];
+	        this.markItDownStatus = source["markItDownStatus"];
+	        this.extractStatus = source["extractStatus"];
+	        this.lastIngestAt = source["lastIngestAt"];
+	        this.lastSuccessAt = source["lastSuccessAt"];
+	        this.lastError = source["lastError"];
+	        this.absolutePath = source["absolutePath"];
+	        this.contentHash = source["contentHash"];
+	        this.extractPath = source["extractPath"];
+	        this.documentId = source["documentId"];
+	    }
+	}
 	
 	export class WorkspaceUpsertInput {
 	    id: string;

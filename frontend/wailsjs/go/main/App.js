@@ -78,6 +78,10 @@ export function GetPDFTranslateStatus(arg1) {
   return window['go']['main']['App']['GetPDFTranslateStatus'](arg1);
 }
 
+export function GetWorkspaceKnowledgeCompileSummary(arg1) {
+  return window['go']['main']['App']['GetWorkspaceKnowledgeCompileSummary'](arg1);
+}
+
 export function GetWorkspaceWikiPage(arg1) {
   return window['go']['main']['App']['GetWorkspaceWikiPage'](arg1);
 }
@@ -112,6 +116,10 @@ export function ListPDFTranslateJobs() {
 
 export function ListReaderNotes(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListReaderNotes'](arg1, arg2, arg3);
+}
+
+export function ListWorkspaceKnowledgeSources(arg1) {
+  return window['go']['main']['App']['ListWorkspaceKnowledgeSources'](arg1);
 }
 
 export function ListWorkspaceWikiPages(arg1) {
