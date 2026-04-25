@@ -35,8 +35,10 @@ type workspaceKnowledgeOutputFile struct {
 }
 
 type workspaceKnowledgeWikiWritePlan struct {
+	Index         workspaceKnowledgeOutputFile
 	Overview      workspaceKnowledgeOutputFile
 	OpenQuestions workspaceKnowledgeOutputFile
+	Log           workspaceKnowledgeOutputFile
 	Documents     []workspaceKnowledgeOutputFile
 	Concepts      []workspaceKnowledgeOutputFile
 }
@@ -167,6 +169,11 @@ func writeWorkspaceKnowledgeWiki(files workspaceKnowledgeFiles, workspaceTitle s
 }
 
 func buildWorkspaceKnowledgeWikiWritePlan(files workspaceKnowledgeFiles, workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, records []workspaceKnowledgeBySourceRecord, conceptPages []workspaceKnowledgeConceptPage, conceptSlugs map[string]string, sourceByID map[string]WorkspaceKnowledgeSource, sourceDocSlugs map[string]string) (workspaceKnowledgeWikiWritePlan, error) {
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return workspaceKnowledgeWikiWritePlan{}, err
+	}
+
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return workspaceKnowledgeWikiWritePlan{}, err
@@ -177,7 +184,16 @@ func buildWorkspaceKnowledgeWikiWritePlan(files workspaceKnowledgeFiles, workspa
 		return workspaceKnowledgeWikiWritePlan{}, err
 	}
 
+	logPath, err := files.LogPath()
+	if err != nil {
+		return workspaceKnowledgeWikiWritePlan{}, err
+	}
+
 	plan := workspaceKnowledgeWikiWritePlan{
+		Index: workspaceKnowledgeOutputFile{
+			Path:    indexPath,
+			Content: buildIndexWikiPage(workspaceTitle, snapshot, conceptSlugs, sourceDocSlugs),
+		},
 		Overview: workspaceKnowledgeOutputFile{
 			Path:    overviewPath,
 			Content: buildOverviewWikiPage(workspaceTitle, snapshot, conceptSlugs, sourceDocSlugs),
@@ -185,6 +201,10 @@ func buildWorkspaceKnowledgeWikiWritePlan(files workspaceKnowledgeFiles, workspa
 		OpenQuestions: workspaceKnowledgeOutputFile{
 			Path:    openQuestionsPath,
 			Content: buildOpenQuestionsPage(snapshot.Tasks, sourceByID),
+		},
+		Log: workspaceKnowledgeOutputFile{
+			Path:    logPath,
+			Content: buildLogWikiPage(workspaceTitle, snapshot),
 		},
 		Documents: make([]workspaceKnowledgeOutputFile, 0, len(records)),
 		Concepts:  make([]workspaceKnowledgeOutputFile, 0, len(conceptPages)),
@@ -217,7 +237,7 @@ func buildWorkspaceKnowledgeWikiWritePlan(files workspaceKnowledgeFiles, workspa
 
 func validateWorkspaceKnowledgeWikiWritePlan(plan workspaceKnowledgeWikiWritePlan) error {
 	seen := map[string]struct{}{}
-	files := []workspaceKnowledgeOutputFile{plan.Overview, plan.OpenQuestions}
+	files := []workspaceKnowledgeOutputFile{plan.Index, plan.Overview, plan.OpenQuestions, plan.Log}
 	files = append(files, plan.Documents...)
 	files = append(files, plan.Concepts...)
 
@@ -243,7 +263,7 @@ func validateWorkspaceKnowledgeWikiWritePlan(plan workspaceKnowledgeWikiWritePla
 }
 
 func writeWorkspaceKnowledgeWikiWritePlan(plan workspaceKnowledgeWikiWritePlan) error {
-	files := []workspaceKnowledgeOutputFile{plan.Overview, plan.OpenQuestions}
+	files := []workspaceKnowledgeOutputFile{plan.Index, plan.Overview, plan.OpenQuestions, plan.Log}
 	files = append(files, plan.Documents...)
 	files = append(files, plan.Concepts...)
 	for _, file := range files {
@@ -317,6 +337,46 @@ func mapTasks(records []workspaceKnowledgeBySourceRecord) []WorkspaceKnowledgeTa
 	return tasks
 }
 
+func buildIndexWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, conceptSlugs map[string]string, sourceDocSlugs map[string]string) string {
+	title := firstNonEmptyText(strings.TrimSpace(workspaceTitle), "Workspace Knowledge")
+
+	var builder strings.Builder
+	builder.WriteString("# ")
+	builder.WriteString(title)
+	builder.WriteString(" Index\n\n")
+	builder.WriteString("- [[overview|Overview]]\n")
+	builder.WriteString("- [[open-questions|Open Questions]]\n")
+	builder.WriteString("- [[log|Log]]\n")
+
+	builder.WriteString("\n## Documents\n\n")
+	if len(snapshot.Sources) == 0 {
+		builder.WriteString("None.\n")
+	} else {
+		for _, source := range snapshot.Sources {
+			builder.WriteString("- [[docs/")
+			builder.WriteString(firstNonEmptyText(sourceDocSlugs[source.ID], workspaceKnowledgeSourceWikiSlug(source)))
+			builder.WriteString("|")
+			builder.WriteString(firstNonEmptyText(source.Title, source.Slug, source.ID))
+			builder.WriteString("]]\n")
+		}
+	}
+
+	builder.WriteString("\n## Concepts\n\n")
+	if len(snapshot.Entities) == 0 {
+		builder.WriteString("None.\n")
+	} else {
+		for _, entity := range snapshot.Entities {
+			builder.WriteString("- [[concepts/")
+			builder.WriteString(conceptSlugs[entity.ID])
+			builder.WriteString("|")
+			builder.WriteString(firstNonEmptyText(entity.Title, entity.ID))
+			builder.WriteString("]]\n")
+		}
+	}
+
+	return builder.String()
+}
+
 func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot, conceptSlugs map[string]string, sourceDocSlugs map[string]string) string {
 	title := firstNonEmptyText(strings.TrimSpace(workspaceTitle), "Workspace Knowledge")
 
@@ -367,6 +427,29 @@ func buildOverviewWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSna
 		}
 	}
 
+	return builder.String()
+}
+
+func buildLogWikiPage(workspaceTitle string, snapshot WorkspaceKnowledgeSnapshot) string {
+	title := firstNonEmptyText(strings.TrimSpace(workspaceTitle), "Workspace Knowledge")
+
+	var builder strings.Builder
+	builder.WriteString("# Log\n\n")
+	builder.WriteString("- Workspace: ")
+	builder.WriteString(title)
+	builder.WriteString("\n")
+	builder.WriteString("- Documents compiled: ")
+	builder.WriteString(fmt.Sprintf("%d", len(snapshot.Sources)))
+	builder.WriteString("\n")
+	builder.WriteString("- Concepts indexed: ")
+	builder.WriteString(fmt.Sprintf("%d", len(snapshot.Entities)))
+	builder.WriteString("\n")
+	builder.WriteString("- Claims aggregated: ")
+	builder.WriteString(fmt.Sprintf("%d", len(snapshot.Claims)))
+	builder.WriteString("\n")
+	builder.WriteString("- Open questions tracked: ")
+	builder.WriteString(fmt.Sprintf("%d", len(snapshot.Tasks)))
+	builder.WriteString("\n")
 	return builder.String()
 }
 

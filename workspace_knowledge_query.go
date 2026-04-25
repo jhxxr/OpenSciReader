@@ -391,35 +391,35 @@ func readWorkspaceKnowledgeOptionalJSON(path string, target any) error {
 }
 
 func retrieveWorkspaceKnowledgeEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
-	schemaEvidence, err := retrieveWorkspaceKnowledgeSchemaEvidence(files, question)
-	if err == nil && len(schemaEvidence) > 0 {
-		return schemaEvidence, nil
-	}
-	schemaErr := err
-
 	wikiEvidence, err := retrieveWorkspaceKnowledgeWikiEvidence(files, question)
 	if err == nil && len(wikiEvidence) > 0 {
 		return wikiEvidence, nil
 	}
 	wikiErr := err
 
-	rawEvidence, rawErr := retrieveWorkspaceKnowledgeRawEvidence(files, question)
-	if rawErr == nil && len(rawEvidence) > 0 {
-		return rawEvidence, nil
+	stateEvidence, err := retrieveWorkspaceKnowledgeStateEvidence(files, question)
+	if err == nil && len(stateEvidence) > 0 {
+		return stateEvidence, nil
 	}
-	if rawErr != nil {
-		return nil, rawErr
+	stateErr := err
+
+	inputEvidence, inputErr := retrieveWorkspaceKnowledgeInputEvidence(files, question)
+	if inputErr == nil && len(inputEvidence) > 0 {
+		return inputEvidence, nil
 	}
-	if schemaErr != nil {
-		return nil, schemaErr
+	if inputErr != nil {
+		return nil, inputErr
 	}
 	if wikiErr != nil {
 		return nil, wikiErr
 	}
-	return rawEvidence, nil
+	if stateErr != nil {
+		return nil, stateErr
+	}
+	return inputEvidence, nil
 }
 
-func retrieveWorkspaceKnowledgeSchemaEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
+func retrieveWorkspaceKnowledgeStateEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
 	hits := make([]WorkspaceKnowledgeEvidenceHit, 0)
 	var firstErr error
 
@@ -497,6 +497,11 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 
 	candidates := []wikiCandidate{}
 	var firstErr error
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, wikiCandidate{path: indexPath, id: "wiki:index"})
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return nil, err
@@ -507,6 +512,11 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 		return nil, err
 	}
 	candidates = append(candidates, wikiCandidate{path: openQuestionsPath, id: "wiki:open-questions"})
+	logPath, err := files.LogPath()
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, wikiCandidate{path: logPath, id: "wiki:log"})
 
 	for _, subdir := range []func() (string, error){files.docsDir, files.conceptsDir} {
 		dir, err := subdir()
@@ -554,7 +564,7 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 		}
 		title := workspaceKnowledgeReadableTitle(candidate.id)
 		hits = append(hits, WorkspaceKnowledgeEvidenceHit{
-			Kind:    "wiki",
+			Kind:    "wiki_page",
 			ID:      candidate.id,
 			Title:   title,
 			Summary: firstWorkspaceKnowledgeMarkdownLine(trimmed),
@@ -571,7 +581,7 @@ func retrieveWorkspaceKnowledgeWikiEvidence(files workspaceKnowledgeFiles, quest
 	return []WorkspaceKnowledgeEvidenceHit{}, nil
 }
 
-func retrieveWorkspaceKnowledgeRawEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
+func retrieveWorkspaceKnowledgeInputEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {
 	extractsDir, err := files.extractsDir()
 	if err != nil {
 		return nil, err

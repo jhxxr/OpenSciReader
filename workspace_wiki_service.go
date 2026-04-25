@@ -789,8 +789,8 @@ func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, worksp
 }
 
 func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot, previousWikiPaths []string) ([]string, error) {
-	paths := make([]string, 0, len(snapshot.Sources)+len(snapshot.Entities)+2+len(previousWikiPaths))
-	seen := make(map[string]struct{}, len(previousWikiPaths)+len(snapshot.Sources)+len(snapshot.Entities)+2)
+	paths := make([]string, 0, len(snapshot.Sources)+len(snapshot.Entities)+4+len(previousWikiPaths))
+	seen := make(map[string]struct{}, len(previousWikiPaths)+len(snapshot.Sources)+len(snapshot.Entities)+4)
 	for _, path := range previousWikiPaths {
 		trimmedPath := strings.TrimSpace(path)
 		if trimmedPath == "" {
@@ -803,6 +803,12 @@ func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot 
 		paths = append(paths, trimmedPath)
 	}
 
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, indexPath)
+
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return nil, err
@@ -814,6 +820,12 @@ func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot 
 		return nil, err
 	}
 	paths, seen = appendWorkspaceKnowledgePath(paths, seen, openQuestionsPath)
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return nil, err
+	}
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, logPath)
 
 	for _, source := range snapshot.Sources {
 		documentPath, err := files.DocumentWikiPath(source.Slug)
