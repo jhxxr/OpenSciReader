@@ -316,6 +316,83 @@ func TestWorkspaceWikiScanFailureInvalidatesCompileSummary(t *testing.T) {
 	}
 }
 
+func TestReadCompileSummaryMissingMarksDirty(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		t.Fatalf("ReadCompileSummary() error = %v", err)
+	}
+	if !summary.CompileDirty {
+		t.Fatalf("summary.CompileDirty = %v, want true", summary.CompileDirty)
+	}
+	if !summary.WikiDirty {
+		t.Fatalf("summary.WikiDirty = %v, want true", summary.WikiDirty)
+	}
+	if len(summary.IncludedSourceIDs) != 0 {
+		t.Fatalf("summary.IncludedSourceIDs = %#v, want empty", summary.IncludedSourceIDs)
+	}
+	if len(summary.FailedSourceIDs) != 0 {
+		t.Fatalf("summary.FailedSourceIDs = %#v, want empty", summary.FailedSourceIDs)
+	}
+	if len(summary.UpdatedWikiPaths) != 0 {
+		t.Fatalf("summary.UpdatedWikiPaths = %#v, want empty", summary.UpdatedWikiPaths)
+	}
+}
+
+func TestBuildWorkspaceKnowledgeCompileSummaryIncludesDeletedWikiPaths(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	deletedDocPath, err := files.DocumentWikiPath("old-doc")
+	if err != nil {
+		t.Fatalf("DocumentWikiPath() error = %v", err)
+	}
+	deletedConceptPath, err := files.ConceptWikiPath("old-concept")
+	if err != nil {
+		t.Fatalf("ConceptWikiPath() error = %v", err)
+	}
+	for _, path := range []string{deletedDocPath, deletedConceptPath} {
+		if err := writeWorkspaceKnowledgeMarkdown(path, "stale"); err != nil {
+			t.Fatalf("writeWorkspaceKnowledgeMarkdown(%q) error = %v", path, err)
+		}
+	}
+
+	previousWikiPaths, err := workspaceKnowledgeCurrentWikiPaths(files)
+	if err != nil {
+		t.Fatalf("workspaceKnowledgeCurrentWikiPaths() error = %v", err)
+	}
+
+	summary, err := buildWorkspaceKnowledgeCompileSummary(files, "workspace-a", "started", WorkspaceKnowledgeSnapshot{}, nil, previousWikiPaths)
+	if err != nil {
+		t.Fatalf("buildWorkspaceKnowledgeCompileSummary() error = %v", err)
+	}
+	if !containsString(summary.UpdatedWikiPaths, deletedDocPath) {
+		t.Fatalf("summary.UpdatedWikiPaths = %#v, want to contain deleted doc path %q", summary.UpdatedWikiPaths, deletedDocPath)
+	}
+	if !containsString(summary.UpdatedWikiPaths, deletedConceptPath) {
+		t.Fatalf("summary.UpdatedWikiPaths = %#v, want to contain deleted concept path %q", summary.UpdatedWikiPaths, deletedConceptPath)
+	}
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		t.Fatalf("OverviewPath() error = %v", err)
+	}
+	if !containsString(summary.UpdatedWikiPaths, overviewPath) {
+		t.Fatalf("summary.UpdatedWikiPaths = %#v, want to contain current overview path %q", summary.UpdatedWikiPaths, overviewPath)
+	}
+}
+
 type panicWorkspaceKnowledgeExtractor struct{}
 
 func (panicWorkspaceKnowledgeExtractor) ExtractMarkdown(ctx context.Context, rawPath string) (PDFMarkdownPayload, error) {

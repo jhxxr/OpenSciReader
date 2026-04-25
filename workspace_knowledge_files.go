@@ -177,6 +177,8 @@ func (f workspaceKnowledgeFiles) ReadCompileSummary() (WorkspaceKnowledgeCompile
 	if _, err := os.Stat(compileSummaryPath); err != nil {
 		if os.IsNotExist(err) {
 			return WorkspaceKnowledgeCompileSummary{
+				CompileDirty:      true,
+				WikiDirty:         true,
 				IncludedSourceIDs: []string{},
 				FailedSourceIDs:   []string{},
 				UpdatedWikiPaths:  []string{},

@@ -308,11 +308,15 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	previousWikiPaths, err := workspaceKnowledgeCurrentWikiPaths(files)
+	if err != nil {
+		return err
+	}
 	snapshot, err := CompileWorkspaceKnowledge(files, workspace.Name)
 	if err != nil {
 		return err
 	}
-	compileSummary, err := buildWorkspaceKnowledgeCompileSummary(files, workspace.ID, strings.TrimSpace(job.StartedAt), snapshot, failedSourceIDs)
+	compileSummary, err := buildWorkspaceKnowledgeCompileSummary(files, workspace.ID, strings.TrimSpace(job.StartedAt), snapshot, failedSourceIDs, previousWikiPaths)
 	if err != nil {
 		return err
 	}
@@ -759,8 +763,8 @@ func updateWorkspaceKnowledgeSourceManifest(files workspaceKnowledgeFiles, sourc
 	return files.WriteSources(mergeWorkspaceKnowledgeSources(sources, []WorkspaceKnowledgeSource{source}, false))
 }
 
-func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, workspaceID, startedAt string, snapshot WorkspaceKnowledgeSnapshot, failedSourceIDs []string) (WorkspaceKnowledgeCompileSummary, error) {
-	updatedWikiPaths, err := workspaceKnowledgeUpdatedWikiPaths(files, snapshot)
+func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, workspaceID, startedAt string, snapshot WorkspaceKnowledgeSnapshot, failedSourceIDs []string, previousWikiPaths []string) (WorkspaceKnowledgeCompileSummary, error) {
+	updatedWikiPaths, err := workspaceKnowledgeUpdatedWikiPaths(files, snapshot, previousWikiPaths)
 	if err != nil {
 		return WorkspaceKnowledgeCompileSummary{}, err
 	}
@@ -781,27 +785,39 @@ func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, worksp
 	}, nil
 }
 
-func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) ([]string, error) {
-	paths := make([]string, 0, len(snapshot.Sources)+len(snapshot.Entities)+2)
+func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot, previousWikiPaths []string) ([]string, error) {
+	paths := make([]string, 0, len(snapshot.Sources)+len(snapshot.Entities)+2+len(previousWikiPaths))
+	seen := make(map[string]struct{}, len(previousWikiPaths)+len(snapshot.Sources)+len(snapshot.Entities)+2)
+	for _, path := range previousWikiPaths {
+		trimmedPath := strings.TrimSpace(path)
+		if trimmedPath == "" {
+			continue
+		}
+		if _, ok := seen[trimmedPath]; ok {
+			continue
+		}
+		seen[trimmedPath] = struct{}{}
+		paths = append(paths, trimmedPath)
+	}
 
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return nil, err
 	}
-	paths = append(paths, overviewPath)
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, overviewPath)
 
 	openQuestionsPath, err := files.OpenQuestionsPath()
 	if err != nil {
 		return nil, err
 	}
-	paths = append(paths, openQuestionsPath)
+	paths, seen = appendWorkspaceKnowledgePath(paths, seen, openQuestionsPath)
 
 	for _, source := range snapshot.Sources {
 		documentPath, err := files.DocumentWikiPath(source.Slug)
 		if err != nil {
 			return nil, err
 		}
-		paths = append(paths, documentPath)
+		paths, seen = appendWorkspaceKnowledgePath(paths, seen, documentPath)
 	}
 
 	for _, conceptSlug := range buildConceptSlugs(snapshot.Entities) {
@@ -809,11 +825,47 @@ func workspaceKnowledgeUpdatedWikiPaths(files workspaceKnowledgeFiles, snapshot 
 		if err != nil {
 			return nil, err
 		}
-		paths = append(paths, conceptPath)
+		paths, seen = appendWorkspaceKnowledgePath(paths, seen, conceptPath)
 	}
 
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func workspaceKnowledgeCurrentWikiPaths(files workspaceKnowledgeFiles) ([]string, error) {
+	wikiDir, err := files.wikiDir()
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0)
+	err = filepath.WalkDir(wikiDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk workspace knowledge wiki paths: %w", err)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func appendWorkspaceKnowledgePath(paths []string, seen map[string]struct{}, path string) ([]string, map[string]struct{}) {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return paths, seen
+	}
+	if _, ok := seen[trimmedPath]; ok {
+		return paths, seen
+	}
+	seen[trimmedPath] = struct{}{}
+	return append(paths, trimmedPath), seen
 }
 
 func normalizeWorkspaceKnowledgeBySourcePayload(source WorkspaceKnowledgeSource, payload WorkspaceKnowledgeBySourcePayload) WorkspaceKnowledgeBySourcePayload {
