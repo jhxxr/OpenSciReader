@@ -259,8 +259,23 @@ func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.
 	if err != nil {
 		t.Fatalf("BySourcePath() error = %v", err)
 	}
+	legacyBySourcePath, err := files.legacyBySourcePath(firstSources[0].Slug)
+	if err != nil {
+		t.Fatalf("legacyBySourcePath() error = %v", err)
+	}
 	if _, err := os.Stat(bySourcePath); err != nil {
 		t.Fatalf("Stat(bySourcePath) after first run error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(legacyBySourcePath, WorkspaceKnowledgeBySourcePayload{
+		Source: firstSources[0],
+		Entities: []WorkspaceKnowledgeEntity{{
+			ID:      "entity:stale-legacy",
+			Title:   "Stale Legacy Entity",
+			Type:    "concept",
+			Summary: "legacy stale summary",
+		}},
+	}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(legacyBySourcePath) error = %v", err)
 	}
 	if err := os.WriteFile(importResult.Documents[0].PrimaryPDFPath, []byte("# Seed\n\nUpdated content that forces a rerun."), 0o600); err != nil {
 		t.Fatalf("WriteFile(imported source) before second run error = %v", err)
@@ -297,6 +312,9 @@ func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.
 	if _, err := os.Stat(bySourcePath); !os.IsNotExist(err) {
 		t.Fatalf("Stat(bySourcePath) after second run error = %v, want not exist", err)
 	}
+	if _, err := os.Stat(legacyBySourcePath); !os.IsNotExist(err) {
+		t.Fatalf("Stat(legacyBySourcePath) after second run error = %v, want not exist", err)
+	}
 
 	entitiesPath, err := files.EntitiesPath()
 	if err != nil {
@@ -319,6 +337,93 @@ func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.
 	}
 	if !containsString(summary.FailedSourceIDs, secondSources[0].ID) {
 		t.Fatalf("compile summary FailedSourceIDs = %#v, want to contain %q", summary.FailedSourceIDs, secondSources[0].ID)
+	}
+}
+
+func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	files := newWorkspaceKnowledgeFiles(paths, workspace.ID)
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		t.Fatalf("IndexPath() error = %v", err)
+	}
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		t.Fatalf("OverviewPath() error = %v", err)
+	}
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		t.Fatalf("OpenQuestionsPath() error = %v", err)
+	}
+	logPath, err := files.LogPath()
+	if err != nil {
+		t.Fatalf("LogPath() error = %v", err)
+	}
+	docPath, err := files.DocumentWikiPath("paper-a")
+	if err != nil {
+		t.Fatalf("DocumentWikiPath() error = %v", err)
+	}
+	conceptPath, err := files.ConceptWikiPath("attention")
+	if err != nil {
+		t.Fatalf("ConceptWikiPath() error = %v", err)
+	}
+
+	for _, path := range []string{indexPath, overviewPath, openQuestionsPath, logPath, docPath, conceptPath} {
+		if err := writeWorkspaceKnowledgeMarkdown(path, "generated wiki content"); err != nil {
+			t.Fatalf("writeWorkspaceKnowledgeMarkdown(%q) error = %v", path, err)
+		}
+	}
+
+	overviewPage, err := newWorkspaceWikiPageRecord(workspace, overviewPath, WorkspaceWikiPageOverview, "overview", "")
+	if err != nil {
+		t.Fatalf("newWorkspaceWikiPageRecord(overview) error = %v", err)
+	}
+	documentPage, err := newWorkspaceWikiPageRecord(workspace, docPath, WorkspaceWikiPageDocument, "paper-a", "doc-a")
+	if err != nil {
+		t.Fatalf("newWorkspaceWikiPageRecord(document) error = %v", err)
+	}
+	if err := store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, []WorkspaceWikiPage{overviewPage, documentPage}); err != nil {
+		t.Fatalf("ReplaceWorkspaceWikiPages() error = %v", err)
+	}
+
+	app := &App{ctx: ctx, paths: paths, store: store}
+	if err := app.DeleteWorkspaceWikiPages(workspace.ID); err != nil {
+		t.Fatalf("DeleteWorkspaceWikiPages() error = %v", err)
+	}
+
+	for _, path := range []string{indexPath, overviewPath, openQuestionsPath, logPath, docPath, conceptPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("Stat(%q) error = %v, want not exist", path, err)
+		}
+	}
+
+	pages, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceWikiPages() error = %v", err)
+	}
+	if len(pages) != 0 {
+		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 0", len(pages))
 	}
 }
 

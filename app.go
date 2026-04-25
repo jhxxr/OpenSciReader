@@ -219,6 +219,48 @@ func (a *App) GetWorkspaceWikiPage(pageID string) (WorkspaceWikiPageContent, err
 }
 
 func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return err
+	}
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return err
+	}
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return err
+	}
+	logPath, err := files.LogPath()
+	if err != nil {
+		return err
+	}
+	for _, path := range []string{indexPath, overviewPath, openQuestionsPath, logPath} {
+		if err := removeWorkspaceKnowledgeFile(path); err != nil {
+			return err
+		}
+	}
+
+	docsDir, err := files.docsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(docsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+	conceptsDir, err := files.conceptsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(conceptsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
 	pages, err := a.store.ListWorkspaceWikiPages(a.ctx, workspaceID)
 	if err != nil {
 		return err

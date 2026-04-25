@@ -260,8 +260,14 @@ func (f workspaceKnowledgeFiles) DeleteBySource(sourceSlug string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(bySourcePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove workspace knowledge by-source payload %s: %w", bySourcePath, err)
+	legacyBySourcePath, err := f.legacyBySourcePath(sourceSlug)
+	if err != nil {
+		return err
+	}
+	for _, path := range []string{bySourcePath, legacyBySourcePath} {
+		if err := removeWorkspaceKnowledgeFile(path); err != nil {
+			return fmt.Errorf("remove workspace knowledge by-source payload %s: %w", path, err)
+		}
 	}
 	return nil
 }
