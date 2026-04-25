@@ -350,6 +350,75 @@ func replaceWorkspaceWikiPagesFromGeneratedFiles(ctx context.Context, store *con
 	return store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages)
 }
 
+func clearWorkspaceWikiBrowseSurface(store *configStore, files workspaceKnowledgeFiles, workspaceID string) error {
+	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+
+	paths := make([]string, 0, 4)
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, indexPath)
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, overviewPath)
+
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, openQuestionsPath)
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, logPath)
+
+	for _, path := range paths {
+		if err := removeWorkspaceKnowledgeFile(path); err != nil {
+			return err
+		}
+	}
+
+	docsDir, err := files.docsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(docsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	conceptsDir, err := files.conceptsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(conceptsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	if store == nil {
+		return nil
+	}
+
+	cleanupCtx := context.Background()
+	pages, err := store.ListWorkspaceWikiPages(cleanupCtx, workspaceID)
+	if err != nil {
+		return err
+	}
+	for _, page := range pages {
+		if err := removeWorkspaceKnowledgeFile(page.MarkdownPath); err != nil {
+			return fmt.Errorf("remove workspace wiki page file: %w", err)
+		}
+	}
+	return store.DeleteWorkspaceWikiPagesByWorkspace(cleanupCtx, workspaceID)
+}
+
 func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) ([]WorkspaceWikiPage, error) {
 	indexPath, err := files.IndexPath()
 	if err != nil {
@@ -784,6 +853,9 @@ func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job W
 	if err := files.EnsureLayout(); err != nil {
 		return err
 	}
+	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
+		return err
+	}
 	if err := files.DeleteCompileSummary(); err != nil {
 		return err
 	}
@@ -804,6 +876,9 @@ func (r *workspaceWikiScanRunner) writeScanRunCancelled(job WorkspaceWikiScanJob
 	}
 	files := newWorkspaceKnowledgeFiles(r.paths, workspaceID)
 	if err := files.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
 		return err
 	}
 	if err := files.DeleteCompileSummary(); err != nil {

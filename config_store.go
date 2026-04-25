@@ -932,6 +932,25 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 		return err
 	}
 
+	var existingDocumentID string
+	var primaryPDFPath string
+	if err := s.appDB.QueryRowContext(ctx, `
+		SELECT id, primary_pdf_path
+		FROM documents
+		WHERE id = ? AND workspace_id = ?
+		LIMIT 1;
+	`, trimmedDocumentID, trimmedWorkspaceID).Scan(&existingDocumentID, &primaryPDFPath); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("document %s not found in workspace %s", trimmedDocumentID, trimmedWorkspaceID)
+		}
+		return fmt.Errorf("load document before delete: %w", err)
+	}
+
+	deletedDocumentKnownPaths, err := s.workspaceKnowledgeKnownPathsForDocument(ctx, paths, trimmedWorkspaceID, trimmedDocumentID, primaryPDFPath)
+	if err != nil {
+		return err
+	}
+
 	files := newWorkspaceKnowledgeFiles(paths, trimmedWorkspaceID)
 	manifest, err := files.ReadSources()
 	if err != nil {
@@ -940,24 +959,11 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 	remainingSources := make([]WorkspaceKnowledgeSource, 0, len(manifest))
 	deletedSources := make([]WorkspaceKnowledgeSource, 0)
 	for _, source := range manifest {
-		if strings.TrimSpace(source.DocumentID) == trimmedDocumentID {
+		if strings.TrimSpace(source.DocumentID) == trimmedDocumentID || workspaceKnowledgeSourceMatchesDeletedDocumentPaths(source, deletedDocumentKnownPaths) {
 			deletedSources = append(deletedSources, source)
 			continue
 		}
 		remainingSources = append(remainingSources, source)
-	}
-
-	var existingDocumentID string
-	if err := s.appDB.QueryRowContext(ctx, `
-		SELECT id
-		FROM documents
-		WHERE id = ? AND workspace_id = ?
-		LIMIT 1;
-	`, trimmedDocumentID, trimmedWorkspaceID).Scan(&existingDocumentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("document %s not found in workspace %s", trimmedDocumentID, trimmedWorkspaceID)
-		}
-		return fmt.Errorf("load document before delete: %w", err)
 	}
 
 	documentRoot := filepath.Join(paths.WorkspacesRootDir, trimmedWorkspaceID, "documents", trimmedDocumentID)
@@ -1039,6 +1045,63 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 		return fmt.Errorf("invalidate workspace compiled knowledge after document delete: %w", err)
 	}
 	return nil
+}
+
+func (s *configStore) workspaceKnowledgeKnownPathsForDocument(ctx context.Context, paths appPaths, workspaceID, documentID, primaryPDFPath string) (map[string]struct{}, error) {
+	knownPaths := make(map[string]struct{})
+	addWorkspaceKnowledgeKnownPath(knownPaths, primaryPDFPath)
+
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT absolute_path, relative_path
+		FROM document_assets
+		WHERE workspace_id = ? AND document_id = ?;
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(documentID))
+	if err != nil {
+		return nil, fmt.Errorf("list document assets before delete: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var absolutePath string
+		var relativePath string
+		if err := rows.Scan(&absolutePath, &relativePath); err != nil {
+			return nil, fmt.Errorf("scan document asset before delete: %w", err)
+		}
+		addWorkspaceKnowledgeKnownPath(knownPaths, absolutePath)
+		trimmedRelativePath := strings.TrimSpace(relativePath)
+		if trimmedRelativePath != "" {
+			assetPath := filepath.FromSlash(trimmedRelativePath)
+			if !filepath.IsAbs(assetPath) {
+				assetPath = filepath.Join(paths.RootDir, assetPath)
+			}
+			addWorkspaceKnowledgeKnownPath(knownPaths, assetPath)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate document assets before delete: %w", err)
+	}
+	return knownPaths, nil
+}
+
+func workspaceKnowledgeSourceMatchesDeletedDocumentPaths(source WorkspaceKnowledgeSource, knownPaths map[string]struct{}) bool {
+	for _, candidate := range []string{source.SourcePath, source.AbsolutePath} {
+		normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(candidate)
+		if normalizedPath == "" {
+			continue
+		}
+		if _, ok := knownPaths[normalizedPath]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func addWorkspaceKnowledgeKnownPath(knownPaths map[string]struct{}, path string) {
+	normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(path)
+	if normalizedPath == "" {
+		return
+	}
+	knownPaths[normalizedPath] = struct{}{}
 }
 
 func (s *configStore) ImportFiles(ctx context.Context, paths appPaths, input ImportFilesInput) (ImportFilesResult, error) {
