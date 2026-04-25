@@ -189,6 +189,15 @@ type WorkspaceKnowledgeEvidenceHit struct {
 	SourceRefs []WorkspaceKnowledgeSourceRef `json:"sourceRefs"`
 }
 
+type WorkspaceKnowledgeProcessingStatus string
+
+const (
+	WorkspaceKnowledgeProcessingPending WorkspaceKnowledgeProcessingStatus = "pending"
+	WorkspaceKnowledgeProcessingRunning WorkspaceKnowledgeProcessingStatus = "running"
+	WorkspaceKnowledgeProcessingReady   WorkspaceKnowledgeProcessingStatus = "ready"
+	WorkspaceKnowledgeProcessingFailed  WorkspaceKnowledgeProcessingStatus = "failed"
+)
+
 type WorkspaceKnowledgeQueryInput struct {
 	WorkspaceID string `json:"workspaceId"`
 	ProviderID  int64  `json:"providerId"`

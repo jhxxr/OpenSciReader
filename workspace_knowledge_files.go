@@ -45,6 +45,14 @@ func (f workspaceKnowledgeFiles) SourcesManifestPath() (string, error) {
 	return filepath.Join(stateDir, "sources.json"), nil
 }
 
+func (f workspaceKnowledgeFiles) CompileSummaryPath() (string, error) {
+	stateDir, err := f.stateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stateDir, "compile-summary.json"), nil
+}
+
 func (f workspaceKnowledgeFiles) ExtractPath(sourceSlug string) (string, error) {
 	return f.MarkItDownPath(sourceSlug)
 }
@@ -139,6 +147,47 @@ func (f workspaceKnowledgeFiles) ReadSources() ([]WorkspaceKnowledgeSource, erro
 		return []WorkspaceKnowledgeSource{}, nil
 	}
 	return sources, nil
+}
+
+func (f workspaceKnowledgeFiles) WriteCompileSummary(summary WorkspaceKnowledgeCompileSummary) error {
+	compileSummaryPath, err := f.CompileSummaryPath()
+	if err != nil {
+		return err
+	}
+	return writeWorkspaceKnowledgeJSON(compileSummaryPath, summary)
+}
+
+func (f workspaceKnowledgeFiles) ReadCompileSummary() (WorkspaceKnowledgeCompileSummary, error) {
+	compileSummaryPath, err := f.CompileSummaryPath()
+	if err != nil {
+		return WorkspaceKnowledgeCompileSummary{}, err
+	}
+
+	if _, err := os.Stat(compileSummaryPath); err != nil {
+		if os.IsNotExist(err) {
+			return WorkspaceKnowledgeCompileSummary{
+				IncludedSourceIDs: []string{},
+				FailedSourceIDs:   []string{},
+				UpdatedWikiPaths:  []string{},
+			}, nil
+		}
+		return WorkspaceKnowledgeCompileSummary{}, fmt.Errorf("stat workspace knowledge compile summary: %w", err)
+	}
+
+	var summary WorkspaceKnowledgeCompileSummary
+	if err := readWorkspaceKnowledgeJSON(compileSummaryPath, &summary); err != nil {
+		return WorkspaceKnowledgeCompileSummary{}, err
+	}
+	if summary.IncludedSourceIDs == nil {
+		summary.IncludedSourceIDs = []string{}
+	}
+	if summary.FailedSourceIDs == nil {
+		summary.FailedSourceIDs = []string{}
+	}
+	if summary.UpdatedWikiPaths == nil {
+		summary.UpdatedWikiPaths = []string{}
+	}
+	return summary, nil
 }
 
 func (f workspaceKnowledgeFiles) WriteBySource(sourceSlug string, payload WorkspaceKnowledgeBySourcePayload) error {
