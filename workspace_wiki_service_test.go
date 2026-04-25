@@ -563,6 +563,155 @@ func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
 	}
 }
 
+func TestDeleteDocumentRemovesWorkspaceKnowledgeArtifactsAndInvalidatesCompiledState(t *testing.T) {
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	const deletedKnowledgeToken = "UniqueDeletedKnowledgeToken"
+	seedPath := filepath.Join(t.TempDir(), "seed.md")
+	if err := os.WriteFile(seedPath, []byte("# Deleted Knowledge\n\n"+deletedKnowledgeToken+" lives only in this imported document.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(seedPath) error = %v", err)
+	}
+
+	importResult, err := store.ImportFiles(ctx, paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{seedPath},
+		SourceType:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles() error = %v", err)
+	}
+	if len(importResult.Documents) != 1 {
+		t.Fatalf("ImportFiles() documents = %d, want 1", len(importResult.Documents))
+	}
+
+	service := newWorkspaceWikiService(paths, store, panicWorkspaceKnowledgeExtractor{}, stubWorkspaceKnowledgeLLM{
+		payload: WorkspaceKnowledgeBySourcePayload{
+			Entities: []WorkspaceKnowledgeEntity{{
+				ID:      "entity:deleted-knowledge",
+				Title:   deletedKnowledgeToken,
+				Type:    "concept",
+				Summary: deletedKnowledgeToken + " is extracted from the deleted document.",
+			}},
+		},
+	})
+	job, err := service.StartScan(ctx, WorkspaceWikiScanStartInput{WorkspaceID: workspace.ID})
+	if err != nil {
+		t.Fatalf("StartScan() error = %v", err)
+	}
+	job = waitForWorkspaceWikiJobTerminal(t, store, job.JobID)
+	if job.Status != WorkspaceWikiScanJobCompleted {
+		t.Fatalf("job.Status = %q, want %q (error=%q)", job.Status, WorkspaceWikiScanJobCompleted, job.Error)
+	}
+
+	files := newWorkspaceKnowledgeFiles(paths, workspace.ID)
+	sources, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("ReadSources() len = %d, want 1", len(sources))
+	}
+	source := sources[0]
+
+	markItDownPath, err := files.MarkItDownPath(source.Slug)
+	if err != nil {
+		t.Fatalf("MarkItDownPath() error = %v", err)
+	}
+	bySourcePath, err := files.BySourcePath(source.Slug)
+	if err != nil {
+		t.Fatalf("BySourcePath() error = %v", err)
+	}
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		t.Fatalf("IndexPath() error = %v", err)
+	}
+	compileSummaryPath, err := files.CompileSummaryPath()
+	if err != nil {
+		t.Fatalf("CompileSummaryPath() error = %v", err)
+	}
+	for _, path := range []string{markItDownPath, bySourcePath, entitiesPath, indexPath, compileSummaryPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("Stat(%q) before delete error = %v, want present", path, err)
+		}
+	}
+
+	pagesBeforeDelete, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceWikiPages() before delete error = %v", err)
+	}
+	if len(pagesBeforeDelete) == 0 {
+		t.Fatal("ListWorkspaceWikiPages() before delete returned no pages")
+	}
+	pagePaths := make([]string, 0, len(pagesBeforeDelete))
+	for _, page := range pagesBeforeDelete {
+		pagePaths = append(pagePaths, page.MarkdownPath)
+	}
+
+	app := &App{ctx: ctx, paths: paths, store: store}
+	if err := app.DeleteDocument(workspace.ID, importResult.Documents[0].ID); err != nil {
+		t.Fatalf("DeleteDocument() error = %v", err)
+	}
+
+	sources, err = files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() after delete error = %v", err)
+	}
+	if len(sources) != 0 {
+		t.Fatalf("ReadSources() after delete len = %d, want 0", len(sources))
+	}
+
+	for _, path := range append([]string{markItDownPath, bySourcePath, entitiesPath, indexPath, compileSummaryPath}, pagePaths...) {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("Stat(%q) after delete error = %v, want not exist", path, err)
+		}
+	}
+
+	pagesAfterDelete, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceWikiPages() after delete error = %v", err)
+	}
+	if len(pagesAfterDelete) != 0 {
+		t.Fatalf("ListWorkspaceWikiPages() after delete len = %d, want 0", len(pagesAfterDelete))
+	}
+
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		t.Fatalf("ReadCompileSummary() after delete error = %v", err)
+	}
+	if !summary.CompileDirty {
+		t.Fatalf("summary.CompileDirty after delete = %v, want true", summary.CompileDirty)
+	}
+	if !summary.WikiDirty {
+		t.Fatalf("summary.WikiDirty after delete = %v, want true", summary.WikiDirty)
+	}
+
+	evidence, err := retrieveWorkspaceKnowledgeEvidence(files, deletedKnowledgeToken)
+	if err != nil {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() after delete error = %v", err)
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() after delete = %#v, want empty", evidence)
+	}
+}
+
 func TestRemoveStaleSourceArtifactsPrunesLegacyBySourcePayloadsOnFullScan(t *testing.T) {
 	t.Parallel()
 

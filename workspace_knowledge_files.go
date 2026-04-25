@@ -272,6 +272,117 @@ func (f workspaceKnowledgeFiles) DeleteBySource(sourceSlug string) error {
 	return nil
 }
 
+func (f workspaceKnowledgeFiles) DeleteMarkItDown(sourceSlug string) error {
+	markItDownPath, err := f.MarkItDownPath(sourceSlug)
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeFile(markItDownPath); err != nil {
+		return fmt.Errorf("remove workspace knowledge markdown %s: %w", markItDownPath, err)
+	}
+	return nil
+}
+
+func (f workspaceKnowledgeFiles) DeleteCompiledArtifacts() error {
+	paths := make([]string, 0, 13)
+
+	entitiesPath, err := f.EntitiesPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, entitiesPath)
+
+	claimsPath, err := f.ClaimsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, claimsPath)
+
+	relationsPath, err := f.RelationsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, relationsPath)
+
+	tasksPath, err := f.TasksPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, tasksPath)
+
+	legacyEntitiesPath, err := f.legacyEntitiesPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, legacyEntitiesPath)
+
+	legacyClaimsPath, err := f.legacyClaimsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, legacyClaimsPath)
+
+	legacyRelationsPath, err := f.legacyRelationsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, legacyRelationsPath)
+
+	legacyTasksPath, err := f.legacyTasksPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, legacyTasksPath)
+
+	indexPath, err := f.IndexPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, indexPath)
+
+	overviewPath, err := f.OverviewPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, overviewPath)
+
+	openQuestionsPath, err := f.OpenQuestionsPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, openQuestionsPath)
+
+	logPath, err := f.LogPath()
+	if err != nil {
+		return err
+	}
+	paths = append(paths, logPath)
+
+	for _, path := range paths {
+		if err := removeWorkspaceKnowledgeFile(path); err != nil {
+			return err
+		}
+	}
+
+	docsDir, err := f.docsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(docsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	conceptsDir, err := f.conceptsDir()
+	if err != nil {
+		return err
+	}
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(conceptsDir, ".md", map[string]struct{}{}); err != nil {
+		return err
+	}
+
+	return f.DeleteCompileSummary()
+}
+
 func (f workspaceKnowledgeFiles) WriteScanRun(record WorkspaceKnowledgeScanRunRecord) error {
 	scanRunPath, err := f.ScanRunPath(record.ID)
 	if err != nil {

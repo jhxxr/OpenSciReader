@@ -932,6 +932,21 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 		return err
 	}
 
+	files := newWorkspaceKnowledgeFiles(paths, trimmedWorkspaceID)
+	manifest, err := files.ReadSources()
+	if err != nil {
+		return fmt.Errorf("read workspace knowledge sources before delete: %w", err)
+	}
+	remainingSources := make([]WorkspaceKnowledgeSource, 0, len(manifest))
+	deletedSources := make([]WorkspaceKnowledgeSource, 0)
+	for _, source := range manifest {
+		if strings.TrimSpace(source.DocumentID) == trimmedDocumentID {
+			deletedSources = append(deletedSources, source)
+			continue
+		}
+		remainingSources = append(remainingSources, source)
+	}
+
 	var existingDocumentID string
 	if err := s.appDB.QueryRowContext(ctx, `
 		SELECT id
@@ -976,8 +991,8 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 
 	if _, err = tx.ExecContext(ctx, `
 		DELETE FROM workspace_wiki_pages
-		WHERE workspace_id = ? AND source_document_id = ?;
-	`, trimmedWorkspaceID, trimmedDocumentID); err != nil {
+		WHERE workspace_id = ?;
+	`, trimmedWorkspaceID); err != nil {
 		return fmt.Errorf("delete document wiki pages: %w", err)
 	}
 
@@ -1007,6 +1022,21 @@ func (s *configStore) DeleteDocument(ctx context.Context, paths appPaths, worksp
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit document delete transaction: %w", err)
+	}
+
+	if err := files.WriteSources(remainingSources); err != nil {
+		return fmt.Errorf("update workspace knowledge sources after delete: %w", err)
+	}
+	for _, source := range deletedSources {
+		if err := files.DeleteMarkItDown(source.Slug); err != nil {
+			return fmt.Errorf("delete workspace knowledge markdown for %s: %w", source.Slug, err)
+		}
+		if err := files.DeleteBySource(source.Slug); err != nil {
+			return fmt.Errorf("delete workspace knowledge by-source payload for %s: %w", source.Slug, err)
+		}
+	}
+	if err := files.DeleteCompiledArtifacts(); err != nil {
+		return fmt.Errorf("invalidate workspace compiled knowledge after document delete: %w", err)
 	}
 	return nil
 }
