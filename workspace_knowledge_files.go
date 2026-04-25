@@ -34,15 +34,23 @@ func (f workspaceKnowledgeFiles) EnsureLayout() error {
 }
 
 func (f workspaceKnowledgeFiles) SourcesPath() (string, error) {
-	rawDir, err := f.rawDir()
+	return f.SourcesManifestPath()
+}
+
+func (f workspaceKnowledgeFiles) SourcesManifestPath() (string, error) {
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(rawDir, "sources.json"), nil
+	return filepath.Join(stateDir, "sources.json"), nil
 }
 
 func (f workspaceKnowledgeFiles) ExtractPath(sourceSlug string) (string, error) {
-	extractsDir, err := f.extractsDir()
+	return f.MarkItDownPath(sourceSlug)
+}
+
+func (f workspaceKnowledgeFiles) MarkItDownPath(sourceSlug string) (string, error) {
+	markItDownDir, err := f.markItDownDir()
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +58,7 @@ func (f workspaceKnowledgeFiles) ExtractPath(sourceSlug string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(extractsDir, validatedSourceSlug+".md"), nil
+	return filepath.Join(markItDownDir, validatedSourceSlug+".md"), nil
 }
 
 func (f workspaceKnowledgeFiles) BySourcePath(sourceSlug string) (string, error) {
@@ -87,15 +95,19 @@ func (f workspaceKnowledgeFiles) BySourcePaths() ([]string, error) {
 }
 
 func (f workspaceKnowledgeFiles) ScanRunPath(scanRunID string) (string, error) {
-	scanRunsDir, err := f.scanRunsDir()
+	return f.JobPath(scanRunID)
+}
+
+func (f workspaceKnowledgeFiles) JobPath(jobID string) (string, error) {
+	jobsDir, err := f.jobsDir()
 	if err != nil {
 		return "", err
 	}
-	validatedScanRunID, err := validateWorkspaceKnowledgePathSegment("scan run id", scanRunID)
+	validatedJobID, err := validateWorkspaceKnowledgePathSegment("job id", jobID)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(scanRunsDir, validatedScanRunID+".json"), nil
+	return filepath.Join(jobsDir, validatedJobID+".json"), nil
 }
 
 func (f workspaceKnowledgeFiles) WriteSources(sources []WorkspaceKnowledgeSource) error {
@@ -159,51 +171,59 @@ func (f workspaceKnowledgeFiles) WriteScanRun(record WorkspaceKnowledgeScanRunRe
 }
 
 func (f workspaceKnowledgeFiles) EntitiesPath() (string, error) {
-	schemaDir, err := f.schemaDir()
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "entities.json"), nil
+	return filepath.Join(stateDir, "entities.json"), nil
 }
 
 func (f workspaceKnowledgeFiles) ClaimsPath() (string, error) {
-	schemaDir, err := f.schemaDir()
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "claims.json"), nil
+	return filepath.Join(stateDir, "claims.json"), nil
 }
 
 func (f workspaceKnowledgeFiles) RelationsPath() (string, error) {
-	schemaDir, err := f.schemaDir()
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "relations.json"), nil
+	return filepath.Join(stateDir, "relations.json"), nil
 }
 
 func (f workspaceKnowledgeFiles) TasksPath() (string, error) {
-	schemaDir, err := f.schemaDir()
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "tasks.json"), nil
+	return filepath.Join(stateDir, "tasks.json"), nil
 }
 
 func (f workspaceKnowledgeFiles) OverviewPath() (string, error) {
+	return f.IndexPath()
+}
+
+func (f workspaceKnowledgeFiles) IndexPath() (string, error) {
 	wikiDir, err := f.wikiDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(wikiDir, "overview.md"), nil
+	return filepath.Join(wikiDir, "index.md"), nil
 }
 
 func (f workspaceKnowledgeFiles) OpenQuestionsPath() (string, error) {
+	return f.LogPath()
+}
+
+func (f workspaceKnowledgeFiles) LogPath() (string, error) {
 	wikiDir, err := f.wikiDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(wikiDir, "open-questions.md"), nil
+	return filepath.Join(wikiDir, "log.md"), nil
 }
 
 func (f workspaceKnowledgeFiles) DocumentWikiPath(sourceSlug string) (string, error) {
@@ -257,22 +277,28 @@ func (f workspaceKnowledgeFiles) layoutDirs() ([]string, error) {
 		return nil, err
 	}
 
-	rawDir := filepath.Join(workspaceRootDir, "raw")
-	extractsDir := filepath.Join(rawDir, "extracts")
-	schemaDir := filepath.Join(workspaceRootDir, "schema")
-	bySourceDir := filepath.Join(schemaDir, "by-source")
-	scanRunsDir := filepath.Join(schemaDir, "scan-runs")
+	sourcesDir := filepath.Join(workspaceRootDir, "sources")
+	sourcePDFsDir := filepath.Join(sourcesDir, "pdfs")
+	inputsDir := filepath.Join(workspaceRootDir, "inputs")
+	markItDownDir := filepath.Join(inputsDir, "markitdown")
+	inputManifestsDir := filepath.Join(inputsDir, "manifests")
+	stateDir := filepath.Join(workspaceRootDir, "state")
+	bySourceDir := filepath.Join(stateDir, "by-source")
+	jobsDir := filepath.Join(stateDir, "jobs")
 	wikiDir := filepath.Join(workspaceRootDir, "wiki")
 	wikiDocsDir := filepath.Join(wikiDir, "docs")
 	wikiConceptsDir := filepath.Join(wikiDir, "concepts")
 
 	return []string{
 		workspaceRootDir,
-		rawDir,
-		extractsDir,
-		schemaDir,
+		sourcesDir,
+		sourcePDFsDir,
+		inputsDir,
+		markItDownDir,
+		inputManifestsDir,
+		stateDir,
 		bySourceDir,
-		scanRunsDir,
+		jobsDir,
 		wikiDir,
 		wikiDocsDir,
 		wikiConceptsDir,
@@ -288,43 +314,67 @@ func (f workspaceKnowledgeFiles) workspaceRootDir() (string, error) {
 }
 
 func (f workspaceKnowledgeFiles) rawDir() (string, error) {
+	return f.sourcesDir()
+}
+
+func (f workspaceKnowledgeFiles) sourcesDir() (string, error) {
 	workspaceRootDir, err := f.workspaceRootDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(workspaceRootDir, "raw"), nil
+	return filepath.Join(workspaceRootDir, "sources"), nil
 }
 
 func (f workspaceKnowledgeFiles) extractsDir() (string, error) {
-	rawDir, err := f.rawDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(rawDir, "extracts"), nil
+	return f.markItDownDir()
 }
 
-func (f workspaceKnowledgeFiles) schemaDir() (string, error) {
+func (f workspaceKnowledgeFiles) inputsDir() (string, error) {
 	workspaceRootDir, err := f.workspaceRootDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(workspaceRootDir, "schema"), nil
+	return filepath.Join(workspaceRootDir, "inputs"), nil
+}
+
+func (f workspaceKnowledgeFiles) markItDownDir() (string, error) {
+	inputsDir, err := f.inputsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(inputsDir, "markitdown"), nil
+}
+
+func (f workspaceKnowledgeFiles) schemaDir() (string, error) {
+	return f.stateDir()
+}
+
+func (f workspaceKnowledgeFiles) stateDir() (string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workspaceRootDir, "state"), nil
 }
 
 func (f workspaceKnowledgeFiles) bySourceDir() (string, error) {
-	schemaDir, err := f.schemaDir()
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "by-source"), nil
+	return filepath.Join(stateDir, "by-source"), nil
 }
 
 func (f workspaceKnowledgeFiles) scanRunsDir() (string, error) {
-	schemaDir, err := f.schemaDir()
+	return f.jobsDir()
+}
+
+func (f workspaceKnowledgeFiles) jobsDir() (string, error) {
+	stateDir, err := f.stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(schemaDir, "scan-runs"), nil
+	return filepath.Join(stateDir, "jobs"), nil
 }
 
 func (f workspaceKnowledgeFiles) wikiDir() (string, error) {
