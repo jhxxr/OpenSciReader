@@ -1454,7 +1454,17 @@ func (s *configStore) ListWorkspaceWikiPages(ctx context.Context, workspaceID st
 		SELECT id, workspace_id, source_document_id, title, slug, kind, markdown_path, summary, created_at, updated_at
 		FROM workspace_wiki_pages
 		WHERE workspace_id = ?
-		ORDER BY CASE kind WHEN 'overview' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC, id DESC;
+		ORDER BY CASE kind
+			WHEN 'index' THEN 0
+			WHEN 'overview' THEN 1
+			WHEN 'open_questions' THEN 2
+			WHEN 'log' THEN 3
+			WHEN 'document' THEN 4
+			WHEN 'concept' THEN 5
+			ELSE 6
+		END,
+		title COLLATE NOCASE ASC,
+		id ASC;
 	`, strings.TrimSpace(workspaceID))
 	if err != nil {
 		return nil, fmt.Errorf("list workspace wiki pages: %w", err)

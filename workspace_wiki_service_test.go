@@ -162,25 +162,36 @@ func TestStartWorkspaceWikiScanPersistsSourceProcessingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaceWikiPages() error = %v", err)
 	}
-	if len(pages) != 2 {
-		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 2", len(pages))
+	if len(pages) != 5 {
+		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 5", len(pages))
 	}
-	if pages[0].Kind != WorkspaceWikiPageOverview {
-		t.Fatalf("pages[0].Kind = %q, want %q", pages[0].Kind, WorkspaceWikiPageOverview)
+	byKind := make(map[WorkspaceWikiPageKind]WorkspaceWikiPage, len(pages))
+	for _, page := range pages {
+		byKind[page.Kind] = page
 	}
-	if pages[0].Slug != "overview" {
-		t.Fatalf("pages[0].Slug = %q, want %q", pages[0].Slug, "overview")
+	if byKind[WorkspaceWikiPageIndex].Slug != "index" {
+		t.Fatalf("index slug = %q, want %q", byKind[WorkspaceWikiPageIndex].Slug, "index")
 	}
-	if pages[1].Kind != WorkspaceWikiPageDocument {
-		t.Fatalf("pages[1].Kind = %q, want %q", pages[1].Kind, WorkspaceWikiPageDocument)
+	if byKind[WorkspaceWikiPageOverview].Slug != "overview" {
+		t.Fatalf("overview slug = %q, want %q", byKind[WorkspaceWikiPageOverview].Slug, "overview")
 	}
-	if pages[1].SourceDocumentID != importResult.Documents[0].ID {
-		t.Fatalf("pages[1].SourceDocumentID = %q, want %q", pages[1].SourceDocumentID, importResult.Documents[0].ID)
+	if byKind[WorkspaceWikiPageOpenQuestions].Slug != "open-questions" {
+		t.Fatalf("open questions slug = %q, want %q", byKind[WorkspaceWikiPageOpenQuestions].Slug, "open-questions")
 	}
-	if pages[1].Slug == "" {
-		t.Fatal("pages[1].Slug = empty, want document slug")
+	if byKind[WorkspaceWikiPageLog].Slug != "log" {
+		t.Fatalf("log slug = %q, want %q", byKind[WorkspaceWikiPageLog].Slug, "log")
 	}
-	page, err := store.GetWorkspaceWikiPage(ctx, pages[1].ID)
+	documentPage, ok := byKind[WorkspaceWikiPageDocument]
+	if !ok {
+		t.Fatalf("missing document page in %#v", pages)
+	}
+	if documentPage.SourceDocumentID != importResult.Documents[0].ID {
+		t.Fatalf("document SourceDocumentID = %q, want %q", documentPage.SourceDocumentID, importResult.Documents[0].ID)
+	}
+	if documentPage.Slug == "" {
+		t.Fatal("document slug = empty, want generated slug")
+	}
+	page, err := store.GetWorkspaceWikiPage(ctx, documentPage.ID)
 	if err != nil {
 		t.Fatalf("GetWorkspaceWikiPage() error = %v", err)
 	}
@@ -189,6 +200,113 @@ func TestStartWorkspaceWikiScanPersistsSourceProcessingState(t *testing.T) {
 	}
 	if _, err := os.Stat(page.MarkdownPath); err != nil {
 		t.Fatalf("Stat(page.MarkdownPath) error = %v", err)
+	}
+}
+
+func TestStartWorkspaceWikiScanRegistersGeneratedWikiPages(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	seedPath := filepath.Join(t.TempDir(), "seed.md")
+	if err := os.WriteFile(seedPath, []byte("# Seed\n\nA markdown source for generated wiki page coverage."), 0o600); err != nil {
+		t.Fatalf("WriteFile(seedPath) error = %v", err)
+	}
+
+	importResult, err := store.ImportFiles(ctx, paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{seedPath},
+		SourceType:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles() error = %v", err)
+	}
+	if len(importResult.Documents) != 1 {
+		t.Fatalf("ImportFiles() documents = %d, want 1", len(importResult.Documents))
+	}
+
+	service := newWorkspaceWikiService(paths, store, panicWorkspaceKnowledgeExtractor{}, stubWorkspaceKnowledgeLLM{
+		payload: WorkspaceKnowledgeBySourcePayload{
+			Entities: []WorkspaceKnowledgeEntity{{ID: "entity:attention", Title: "Attention", Type: "concept", Summary: "Core mechanism"}},
+		},
+	})
+	job, err := service.StartScan(ctx, WorkspaceWikiScanStartInput{WorkspaceID: workspace.ID})
+	if err != nil {
+		t.Fatalf("StartScan() error = %v", err)
+	}
+
+	job = waitForWorkspaceWikiJobTerminal(t, store, job.JobID)
+	if job.Status != WorkspaceWikiScanJobCompleted {
+		t.Fatalf("job.Status = %q, want %q (error=%q)", job.Status, WorkspaceWikiScanJobCompleted, job.Error)
+	}
+
+	pages, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceWikiPages() error = %v", err)
+	}
+	if len(pages) != 6 {
+		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 6", len(pages))
+	}
+
+	byKind := make(map[WorkspaceWikiPageKind]WorkspaceWikiPage, len(pages))
+	for _, page := range pages {
+		byKind[page.Kind] = page
+		if page.MarkdownPath == "" {
+			t.Fatalf("page %q markdown path = empty", page.Kind)
+		}
+		if _, err := os.Stat(page.MarkdownPath); err != nil {
+			t.Fatalf("Stat(%q) error = %v", page.MarkdownPath, err)
+		}
+	}
+
+	for _, kind := range []WorkspaceWikiPageKind{
+		WorkspaceWikiPageIndex,
+		WorkspaceWikiPageOverview,
+		WorkspaceWikiPageOpenQuestions,
+		WorkspaceWikiPageLog,
+		WorkspaceWikiPageDocument,
+		WorkspaceWikiPageConcept,
+	} {
+		page, ok := byKind[kind]
+		if !ok {
+			t.Fatalf("missing page kind %q in %#v", kind, pages)
+		}
+		if page.Slug == "" {
+			t.Fatalf("page %q slug = empty", kind)
+		}
+	}
+
+	if byKind[WorkspaceWikiPageIndex].Slug != "index" {
+		t.Fatalf("index slug = %q, want %q", byKind[WorkspaceWikiPageIndex].Slug, "index")
+	}
+	if byKind[WorkspaceWikiPageOpenQuestions].Slug != "open-questions" {
+		t.Fatalf("open questions slug = %q, want %q", byKind[WorkspaceWikiPageOpenQuestions].Slug, "open-questions")
+	}
+	if byKind[WorkspaceWikiPageLog].Slug != "log" {
+		t.Fatalf("log slug = %q, want %q", byKind[WorkspaceWikiPageLog].Slug, "log")
+	}
+	if byKind[WorkspaceWikiPageDocument].SourceDocumentID != importResult.Documents[0].ID {
+		t.Fatalf("document SourceDocumentID = %q, want %q", byKind[WorkspaceWikiPageDocument].SourceDocumentID, importResult.Documents[0].ID)
+	}
+	if byKind[WorkspaceWikiPageConcept].SourceDocumentID != "" {
+		t.Fatalf("concept SourceDocumentID = %q, want empty", byKind[WorkspaceWikiPageConcept].SourceDocumentID)
+	}
+	if byKind[WorkspaceWikiPageConcept].Slug != "attention" {
+		t.Fatalf("concept slug = %q, want %q", byKind[WorkspaceWikiPageConcept].Slug, "attention")
 	}
 }
 

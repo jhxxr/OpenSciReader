@@ -272,8 +272,12 @@ const (
 type WorkspaceWikiPageKind string
 
 const (
-	WorkspaceWikiPageOverview WorkspaceWikiPageKind = "overview"
-	WorkspaceWikiPageDocument WorkspaceWikiPageKind = "document"
+	WorkspaceWikiPageIndex         WorkspaceWikiPageKind = "index"
+	WorkspaceWikiPageOverview      WorkspaceWikiPageKind = "overview"
+	WorkspaceWikiPageOpenQuestions WorkspaceWikiPageKind = "open_questions"
+	WorkspaceWikiPageLog           WorkspaceWikiPageKind = "log"
+	WorkspaceWikiPageDocument      WorkspaceWikiPageKind = "document"
+	WorkspaceWikiPageConcept       WorkspaceWikiPageKind = "concept"
 )
 
 type WorkspaceWikiScanStartInput struct {

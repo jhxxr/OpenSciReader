@@ -324,7 +324,7 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err := files.WriteCompileSummary(compileSummary); err != nil {
 		return err
 	}
-	if err := replaceWorkspaceWikiPagesFromGeneratedFiles(ctx, r.store, workspace, files, snapshot.Sources); err != nil {
+	if err := replaceWorkspaceWikiPagesFromGeneratedFiles(ctx, r.store, workspace, files, snapshot); err != nil {
 		return err
 	}
 
@@ -339,18 +339,27 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	})
 }
 
-func replaceWorkspaceWikiPagesFromGeneratedFiles(ctx context.Context, store *configStore, workspace Workspace, files workspaceKnowledgeFiles, sources []WorkspaceKnowledgeSource) error {
+func replaceWorkspaceWikiPagesFromGeneratedFiles(ctx context.Context, store *configStore, workspace Workspace, files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) error {
 	if store == nil {
 		return fmt.Errorf("config store is unavailable")
 	}
-	pages, err := buildWorkspaceWikiPagesFromGeneratedFiles(workspace, files, sources)
+	pages, err := buildWorkspaceWikiPagesFromGeneratedFiles(workspace, files, snapshot)
 	if err != nil {
 		return err
 	}
 	return store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages)
 }
 
-func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files workspaceKnowledgeFiles, sources []WorkspaceKnowledgeSource) ([]WorkspaceWikiPage, error) {
+func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files workspaceKnowledgeFiles, snapshot WorkspaceKnowledgeSnapshot) ([]WorkspaceWikiPage, error) {
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	indexPage, err := newWorkspaceWikiPageRecord(workspace, indexPath, WorkspaceWikiPageIndex, "index", "")
+	if err != nil {
+		return nil, err
+	}
+
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		return nil, err
@@ -360,9 +369,27 @@ func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files worksp
 		return nil, err
 	}
 
-	pages := make([]WorkspaceWikiPage, 0, len(sources)+1)
-	pages = append(pages, overviewPage)
-	for _, source := range sources {
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		return nil, err
+	}
+	openQuestionsPage, err := newWorkspaceWikiPageRecord(workspace, openQuestionsPath, WorkspaceWikiPageOpenQuestions, "open-questions", "")
+	if err != nil {
+		return nil, err
+	}
+
+	logPath, err := files.LogPath()
+	if err != nil {
+		return nil, err
+	}
+	logPage, err := newWorkspaceWikiPageRecord(workspace, logPath, WorkspaceWikiPageLog, "log", "")
+	if err != nil {
+		return nil, err
+	}
+
+	pages := make([]WorkspaceWikiPage, 0, len(snapshot.Sources)+len(snapshot.Entities)+4)
+	pages = append(pages, indexPage, overviewPage, openQuestionsPage, logPage)
+	for _, source := range snapshot.Sources {
 		documentPath, err := files.DocumentWikiPath(source.Slug)
 		if err != nil {
 			return nil, err
@@ -374,6 +401,35 @@ func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files worksp
 		page.Title = firstNonEmptyText(strings.TrimSpace(source.Title), strings.TrimSpace(source.Slug))
 		pages = append(pages, page)
 	}
+
+	conceptTitlesBySlug := make(map[string]string, len(snapshot.Entities))
+	for entityID, conceptSlug := range buildConceptSlugs(snapshot.Entities) {
+		conceptTitlesBySlug[conceptSlug] = workspaceKnowledgeReadableTitle(conceptSlug)
+		for _, entity := range snapshot.Entities {
+			if entity.ID != entityID {
+				continue
+			}
+			conceptTitlesBySlug[conceptSlug] = firstNonEmptyText(strings.TrimSpace(entity.Title), conceptTitlesBySlug[conceptSlug])
+			break
+		}
+	}
+	conceptSlugs := make([]string, 0, len(conceptTitlesBySlug))
+	for conceptSlug := range conceptTitlesBySlug {
+		conceptSlugs = append(conceptSlugs, conceptSlug)
+	}
+	sort.Strings(conceptSlugs)
+	for _, conceptSlug := range conceptSlugs {
+		conceptPath, err := files.ConceptWikiPath(conceptSlug)
+		if err != nil {
+			return nil, err
+		}
+		page, err := newWorkspaceWikiPageRecord(workspace, conceptPath, WorkspaceWikiPageConcept, conceptSlug, "")
+		if err != nil {
+			return nil, err
+		}
+		page.Title = conceptTitlesBySlug[conceptSlug]
+		pages = append(pages, page)
+	}
 	return pages, nil
 }
 
@@ -383,10 +439,7 @@ func newWorkspaceWikiPageRecord(workspace Workspace, markdownPath string, kind W
 		return WorkspaceWikiPage{}, fmt.Errorf("stat generated workspace wiki page %s: %w", markdownPath, err)
 	}
 	updatedAt := info.ModTime().UTC().Format(time.RFC3339)
-	title := strings.TrimSpace(slug)
-	if kind == WorkspaceWikiPageOverview {
-		title = "Overview"
-	}
+	title := workspaceWikiPageTitle(kind, slug)
 	return WorkspaceWikiPage{
 		ID:               fmt.Sprintf("%s:%s:%s", strings.TrimSpace(workspace.ID), kind, strings.TrimSpace(slug)),
 		WorkspaceID:      strings.TrimSpace(workspace.ID),
@@ -399,6 +452,24 @@ func newWorkspaceWikiPageRecord(workspace Workspace, markdownPath string, kind W
 		CreatedAt:        updatedAt,
 		UpdatedAt:        updatedAt,
 	}, nil
+}
+
+func workspaceWikiPageTitle(kind WorkspaceWikiPageKind, slug string) string {
+	trimmedSlug := strings.TrimSpace(slug)
+	switch kind {
+	case WorkspaceWikiPageIndex:
+		return "Index"
+	case WorkspaceWikiPageOverview:
+		return "Overview"
+	case WorkspaceWikiPageOpenQuestions:
+		return "Open Questions"
+	case WorkspaceWikiPageLog:
+		return "Log"
+	case WorkspaceWikiPageConcept:
+		return workspaceKnowledgeReadableTitle(trimmedSlug)
+	default:
+		return trimmedSlug
+	}
 }
 
 func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace Workspace, documentID string, files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeSource, error) {

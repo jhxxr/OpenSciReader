@@ -13,6 +13,7 @@ import type {
   WorkspaceWikiPageContent,
   WorkspaceWikiScanJob,
 } from '../types/workspaceWiki';
+import { workspaceWikiPageKindLabel } from '../types/workspaceWiki';
 
 interface WorkspaceTabProps {
   workspace: Workspace | null;
@@ -343,7 +344,7 @@ export function WorkspaceTab({
             <div className="section-header workspace-panel-header">
               <div>
                 <h3>Wiki Pages</h3>
-                <p className="workspace-panel-description">Browse the generated overview and document pages for this workspace.</p>
+                <p className="workspace-panel-description">Browse the generated workspace wiki pages for this workspace.</p>
               </div>
               <span className="badge badge-count">{wikiPages.length}</span>
             </div>
@@ -359,7 +360,7 @@ export function WorkspaceTab({
                       onClick={() => void onSelectWikiPage(page.id)}
                     >
                       <strong>{page.title}</strong>
-                      <small>{page.kind === 'overview' ? 'Overview' : 'Document Page'}</small>
+                      <small>{workspaceWikiPageKindLabel(page.kind)}</small>
                       <span>{page.summary || 'No summary available yet.'}</span>
                     </button>
                   ))}
