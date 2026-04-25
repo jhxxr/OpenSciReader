@@ -234,6 +234,22 @@ func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
 	return a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID)
 }
 
+func (a *App) ListWorkspaceKnowledgeSources(workspaceID string) ([]WorkspaceKnowledgeSource, error) {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return nil, err
+	}
+	return files.ReadSources()
+}
+
+func (a *App) GetWorkspaceKnowledgeCompileSummary(workspaceID string) (WorkspaceKnowledgeCompileSummary, error) {
+	files := newWorkspaceKnowledgeFiles(a.paths, workspaceID)
+	if err := files.EnsureLayout(); err != nil {
+		return WorkspaceKnowledgeCompileSummary{}, err
+	}
+	return files.ReadCompileSummary()
+}
+
 func (a *App) GetCollections(source string) ([]CollectionTree, error) {
 	return a.zotero.GetCollections(a.ctx, source)
 }

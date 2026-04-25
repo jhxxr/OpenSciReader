@@ -5,6 +5,36 @@ export interface WorkspaceKnowledgeSourceRef {
   excerpt: string;
 }
 
+export interface WorkspaceKnowledgeSource {
+  sourceId: string;
+  workspaceId: string;
+  title: string;
+  slug: string;
+  kind: string;
+  sourcePath: string;
+  markItDownPath: string;
+  markItDownStatus: string;
+  extractStatus: string;
+  lastIngestAt: string;
+  lastSuccessAt: string;
+  lastError: string;
+  absolutePath?: string;
+  contentHash: string;
+  extractPath?: string;
+  documentId: string;
+}
+
+export interface WorkspaceKnowledgeCompileSummary {
+  workspaceId: string;
+  startedAt: string;
+  finishedAt: string;
+  includedSourceIds: string[];
+  failedSourceIds: string[];
+  updatedWikiPaths: string[];
+  compileDirty: boolean;
+  wikiDirty: boolean;
+}
+
 export interface WorkspaceKnowledgeEntity {
   id: string;
   workspaceId: string;
