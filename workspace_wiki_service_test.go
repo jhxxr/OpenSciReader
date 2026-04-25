@@ -459,8 +459,6 @@ func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.
 }
 
 func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
-	t.Parallel()
-
 	paths := newTestAppPaths(t)
 	store, err := newConfigStore(paths)
 	if err != nil {
@@ -531,6 +529,8 @@ func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteCompileSummary() error = %v", err)
 	}
+	staleToken := "stale aggregate knowledge"
+	seedWorkspaceKnowledgeAggregateState(t, files, workspace.ID, staleToken)
 
 	app := &App{ctx: ctx, paths: paths, store: store}
 	if err := app.DeleteWorkspaceWikiPages(workspace.ID); err != nil {
@@ -542,6 +542,7 @@ func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
 			t.Fatalf("Stat(%q) error = %v, want not exist", path, err)
 		}
 	}
+	assertWorkspaceKnowledgeAggregateStateCleared(t, files, workspace.ID, staleToken)
 
 	pages, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
 	if err != nil {
@@ -847,8 +848,6 @@ func TestRemoveStaleSourceArtifactsPrunesLegacyBySourcePayloadsOnFullScan(t *tes
 }
 
 func TestWorkspaceWikiScanFailureOrCancelClearsStaleWikiBrowseSurface(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name   string
 		jobID  string
@@ -931,6 +930,8 @@ func TestWorkspaceWikiScanFailureOrCancelClearsStaleWikiBrowseSurface(t *testing
 			if err := files.WriteCompileSummary(WorkspaceKnowledgeCompileSummary{WorkspaceID: workspace.ID, IncludedSourceIDs: []string{"source:a"}}); err != nil {
 				t.Fatalf("WriteCompileSummary() error = %v", err)
 			}
+			staleToken := "stale aggregate knowledge"
+			seedWorkspaceKnowledgeAggregateState(t, files, workspace.ID, staleToken)
 
 			runner := &workspaceWikiScanRunner{paths: paths, store: store}
 			job := WorkspaceWikiScanJob{WorkspaceID: workspace.ID, JobID: tc.jobID, StartedAt: nowRFC3339()}
@@ -950,6 +951,7 @@ func TestWorkspaceWikiScanFailureOrCancelClearsStaleWikiBrowseSurface(t *testing
 					t.Fatalf("Stat(%q) after %s error = %v, want not exist", path, tc.name, err)
 				}
 			}
+			assertWorkspaceKnowledgeAggregateStateCleared(t, files, workspace.ID, staleToken)
 			pages, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
 			if err != nil {
 				t.Fatalf("ListWorkspaceWikiPages() error = %v", err)
@@ -958,6 +960,102 @@ func TestWorkspaceWikiScanFailureOrCancelClearsStaleWikiBrowseSurface(t *testing
 				t.Fatalf("ListWorkspaceWikiPages() after %s len = %d, want 0", tc.name, len(pages))
 			}
 		})
+	}
+}
+
+func seedWorkspaceKnowledgeAggregateState(t *testing.T, files workspaceKnowledgeFiles, workspaceID, staleToken string) {
+	t.Helper()
+
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath() error = %v", err)
+	}
+	relationsPath, err := files.RelationsPath()
+	if err != nil {
+		t.Fatalf("RelationsPath() error = %v", err)
+	}
+	tasksPath, err := files.TasksPath()
+	if err != nil {
+		t.Fatalf("TasksPath() error = %v", err)
+	}
+
+	for path, payload := range map[string]any{
+		entitiesPath: []WorkspaceKnowledgeEntity{{
+			ID:          "entity:stale",
+			WorkspaceID: workspaceID,
+			Title:       staleToken,
+			Summary:     staleToken,
+		}},
+		claimsPath: []WorkspaceKnowledgeClaim{{
+			ID:          "claim:stale",
+			WorkspaceID: workspaceID,
+			Title:       staleToken,
+			Summary:     staleToken,
+		}},
+		relationsPath: []WorkspaceKnowledgeRelation{{
+			ID:          "relation:stale",
+			WorkspaceID: workspaceID,
+			Type:        staleToken,
+			FromID:      "entity:stale",
+			ToID:        "claim:stale",
+		}},
+		tasksPath: []WorkspaceKnowledgeTask{{
+			ID:          "task:stale",
+			WorkspaceID: workspaceID,
+			Title:       staleToken,
+			Summary:     staleToken,
+		}},
+	} {
+		if err := writeWorkspaceKnowledgeJSON(path, payload); err != nil {
+			t.Fatalf("writeWorkspaceKnowledgeJSON(%q) error = %v", path, err)
+		}
+	}
+}
+
+func assertWorkspaceKnowledgeAggregateStateCleared(t *testing.T, files workspaceKnowledgeFiles, workspaceID, staleToken string) {
+	t.Helper()
+
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath() error = %v", err)
+	}
+	relationsPath, err := files.RelationsPath()
+	if err != nil {
+		t.Fatalf("RelationsPath() error = %v", err)
+	}
+	tasksPath, err := files.TasksPath()
+	if err != nil {
+		t.Fatalf("TasksPath() error = %v", err)
+	}
+	for _, path := range []string{entitiesPath, claimsPath, relationsPath, tasksPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("Stat(%q) error = %v, want not exist", path, err)
+		}
+	}
+
+	queryService := &workspaceKnowledgeQueryService{paths: files.paths, files: files}
+	entities, err := queryService.ListEntities(context.Background(), workspaceID)
+	if err != nil {
+		t.Fatalf("ListEntities() error = %v", err)
+	}
+	if len(entities) != 0 {
+		t.Fatalf("ListEntities() = %#v, want empty after invalidation", entities)
+	}
+
+	evidence, err := retrieveWorkspaceKnowledgeEvidence(files, staleToken)
+	if err != nil {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() error = %v", err)
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() = %#v, want empty after invalidation", evidence)
 	}
 }
 

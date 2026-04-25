@@ -223,60 +223,10 @@ func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
 	if err := files.EnsureLayout(); err != nil {
 		return err
 	}
-
-	indexPath, err := files.IndexPath()
-	if err != nil {
+	if err := clearWorkspaceWikiBrowseSurface(a.store, files, workspaceID); err != nil {
 		return err
 	}
-	overviewPath, err := files.OverviewPath()
-	if err != nil {
-		return err
-	}
-	openQuestionsPath, err := files.OpenQuestionsPath()
-	if err != nil {
-		return err
-	}
-	logPath, err := files.LogPath()
-	if err != nil {
-		return err
-	}
-	for _, path := range []string{indexPath, overviewPath, openQuestionsPath, logPath} {
-		if err := removeWorkspaceKnowledgeFile(path); err != nil {
-			return err
-		}
-	}
-
-	docsDir, err := files.docsDir()
-	if err != nil {
-		return err
-	}
-	if err := removeWorkspaceKnowledgeArtifactsNotInSet(docsDir, ".md", map[string]struct{}{}); err != nil {
-		return err
-	}
-	conceptsDir, err := files.conceptsDir()
-	if err != nil {
-		return err
-	}
-	if err := removeWorkspaceKnowledgeArtifactsNotInSet(conceptsDir, ".md", map[string]struct{}{}); err != nil {
-		return err
-	}
-
-	pages, err := a.store.ListWorkspaceWikiPages(a.ctx, workspaceID)
-	if err != nil {
-		return err
-	}
-	for _, page := range pages {
-		if strings.TrimSpace(page.MarkdownPath) == "" {
-			continue
-		}
-		if err := os.Remove(page.MarkdownPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove workspace wiki page file: %w", err)
-		}
-	}
-	if err := a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID); err != nil {
-		return err
-	}
-	return files.DeleteCompileSummary()
+	return files.DeleteCompiledArtifacts()
 }
 
 func (a *App) ListWorkspaceKnowledgeSources(workspaceID string) ([]WorkspaceKnowledgeSource, error) {

@@ -856,7 +856,7 @@ func (r *workspaceWikiScanRunner) writeScanRunFailure(ctx context.Context, job W
 	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
 		return err
 	}
-	if err := files.DeleteCompileSummary(); err != nil {
+	if err := files.DeleteCompiledArtifacts(); err != nil {
 		return err
 	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
@@ -881,7 +881,7 @@ func (r *workspaceWikiScanRunner) writeScanRunCancelled(job WorkspaceWikiScanJob
 	if err := clearWorkspaceWikiBrowseSurface(r.store, files, workspaceID); err != nil {
 		return err
 	}
-	if err := files.DeleteCompileSummary(); err != nil {
+	if err := files.DeleteCompiledArtifacts(); err != nil {
 		return err
 	}
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
