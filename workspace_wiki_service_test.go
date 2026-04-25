@@ -393,6 +393,130 @@ func TestBuildWorkspaceKnowledgeCompileSummaryIncludesDeletedWikiPaths(t *testin
 	}
 }
 
+func TestWorkspaceWikiScanInterruptedRerunPreservesUntouchedSourceState(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.appDB.Close()
+		_ = store.ocrDB.Close()
+	})
+
+	ctx := context.Background()
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{ID: "workspace-a", Name: "Workspace A"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	seedDir := t.TempDir()
+	firstSeedPath := filepath.Join(seedDir, "a-first.md")
+	secondSeedPath := filepath.Join(seedDir, "z-second.md")
+	if err := os.WriteFile(firstSeedPath, []byte("# First\n\nready once."), 0o600); err != nil {
+		t.Fatalf("WriteFile(firstSeedPath) error = %v", err)
+	}
+	if err := os.WriteFile(secondSeedPath, []byte("# Second\n\nready once."), 0o600); err != nil {
+		t.Fatalf("WriteFile(secondSeedPath) error = %v", err)
+	}
+
+	importResult, err := store.ImportFiles(ctx, paths, ImportFilesInput{
+		WorkspaceID: workspace.ID,
+		FilePaths:   []string{firstSeedPath, secondSeedPath},
+		SourceType:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("ImportFiles() error = %v", err)
+	}
+	if len(importResult.Documents) != 2 {
+		t.Fatalf("ImportFiles() documents = %d, want 2", len(importResult.Documents))
+	}
+
+	runner := &workspaceWikiScanRunner{
+		paths: paths,
+		store: store,
+		pdf:   panicWorkspaceKnowledgeExtractor{},
+		knowledgeLLM: stubWorkspaceKnowledgeLLM{
+			payload: WorkspaceKnowledgeBySourcePayload{},
+		},
+	}
+	firstRunJob := newSavedWorkspaceWikiScanJob(t, store, workspace.ID)
+	runner.run(ctx, firstRunJob)
+
+	files := newWorkspaceKnowledgeFiles(paths, workspace.ID)
+	sourcesAfterFirstRun, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() after first run error = %v", err)
+	}
+	if len(sourcesAfterFirstRun) != 2 {
+		t.Fatalf("ReadSources() after first run len = %d, want 2", len(sourcesAfterFirstRun))
+	}
+	secondSource := sourcesAfterFirstRun[1]
+	if secondSource.MarkItDownStatus != "ready" {
+		t.Fatalf("second source MarkItDownStatus after first run = %q, want ready", secondSource.MarkItDownStatus)
+	}
+	if secondSource.ExtractStatus != "ready" {
+		t.Fatalf("second source ExtractStatus after first run = %q, want ready", secondSource.ExtractStatus)
+	}
+	if secondSource.LastSuccessAt == "" {
+		t.Fatalf("second source LastSuccessAt after first run = %q, want non-empty", secondSource.LastSuccessAt)
+	}
+
+	if err := os.WriteFile(importResult.Documents[0].PrimaryPDFPath, []byte("# First\n\nchanged before interrupted rerun."), 0o600); err != nil {
+		t.Fatalf("WriteFile(first imported source) error = %v", err)
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	runner.knowledgeLLM = stubWorkspaceKnowledgeLLM{
+		bySourceErr: fmt.Errorf("stop after first failure"),
+		onGenerateBySource: func() {
+			cancel()
+		},
+	}
+	secondRunJob := newSavedWorkspaceWikiScanJob(t, store, workspace.ID)
+	runner.run(runCtx, secondRunJob)
+
+	sourcesAfterInterruptedRun, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() after interrupted rerun error = %v", err)
+	}
+	if len(sourcesAfterInterruptedRun) != 2 {
+		t.Fatalf("ReadSources() after interrupted rerun len = %d, want 2", len(sourcesAfterInterruptedRun))
+	}
+	untouchedSource := sourcesAfterInterruptedRun[1]
+	if untouchedSource.MarkItDownStatus != "ready" {
+		t.Fatalf("untouched source MarkItDownStatus after interrupted rerun = %q, want ready", untouchedSource.MarkItDownStatus)
+	}
+	if untouchedSource.ExtractStatus != "ready" {
+		t.Fatalf("untouched source ExtractStatus after interrupted rerun = %q, want ready", untouchedSource.ExtractStatus)
+	}
+	if untouchedSource.LastError != "" {
+		t.Fatalf("untouched source LastError after interrupted rerun = %q, want empty", untouchedSource.LastError)
+	}
+	if untouchedSource.LastSuccessAt != secondSource.LastSuccessAt {
+		t.Fatalf("untouched source LastSuccessAt after interrupted rerun = %q, want preserved %q", untouchedSource.LastSuccessAt, secondSource.LastSuccessAt)
+	}
+}
+
+func newSavedWorkspaceWikiScanJob(t *testing.T, store *configStore, workspaceID string) WorkspaceWikiScanJob {
+	t.Helper()
+
+	job, err := store.SaveWorkspaceWikiScanJob(context.Background(), WorkspaceWikiScanJob{
+		WorkspaceID:  workspaceID,
+		Status:       WorkspaceWikiScanJobQueued,
+		CurrentStage: "queued",
+		Message:      "queued",
+		StartedAt:    nowRFC3339(),
+		UpdatedAt:    nowRFC3339(),
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkspaceWikiScanJob() error = %v", err)
+	}
+	return job
+}
+
 type panicWorkspaceKnowledgeExtractor struct{}
 
 func (panicWorkspaceKnowledgeExtractor) ExtractMarkdown(ctx context.Context, rawPath string) (PDFMarkdownPayload, error) {
@@ -400,11 +524,15 @@ func (panicWorkspaceKnowledgeExtractor) ExtractMarkdown(ctx context.Context, raw
 }
 
 type stubWorkspaceKnowledgeLLM struct {
-	payload     WorkspaceKnowledgeBySourcePayload
-	bySourceErr error
+	payload            WorkspaceKnowledgeBySourcePayload
+	bySourceErr        error
+	onGenerateBySource func()
 }
 
 func (s stubWorkspaceKnowledgeLLM) GenerateWorkspaceKnowledgeBySource(ctx context.Context, providerID, modelID int64, prompt string) (WorkspaceKnowledgeBySourcePayload, error) {
+	if s.onGenerateBySource != nil {
+		s.onGenerateBySource()
+	}
 	if s.bySourceErr != nil {
 		return WorkspaceKnowledgeBySourcePayload{}, s.bySourceErr
 	}

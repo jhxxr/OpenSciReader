@@ -737,9 +737,12 @@ func mergeSkippedWorkspaceKnowledgeSource(existingSource, currentSource Workspac
 
 func mergeWorkspaceKnowledgeSourceState(existingSource, currentSource WorkspaceKnowledgeSource) WorkspaceKnowledgeSource {
 	currentSource.MarkItDownPath = firstNonEmptyText(currentSource.MarkItDownPath, existingSource.MarkItDownPath)
+	currentSource.MarkItDownStatus = firstNonEmptyText(existingSource.MarkItDownStatus, currentSource.MarkItDownStatus)
+	currentSource.ExtractStatus = firstNonEmptyText(existingSource.ExtractStatus, currentSource.ExtractStatus)
 	currentSource.ExtractPath = firstNonEmptyText(currentSource.ExtractPath, existingSource.ExtractPath)
 	currentSource.LastIngestAt = existingSource.LastIngestAt
 	currentSource.LastSuccessAt = existingSource.LastSuccessAt
+	currentSource.LastError = firstNonEmptyText(existingSource.LastError, currentSource.LastError)
 	return currentSource
 }
 
