@@ -329,10 +329,7 @@ func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace 
 			return walkErr
 		}
 		if entry.IsDir() {
-			switch normalizeWorkspaceKnowledgeAbsolutePath(path) {
-			case normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "raw")),
-				normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "schema")),
-				normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, "wiki")):
+			if isInternalWorkspaceKnowledgeDir(workspaceRoot, path) {
 				return fs.SkipDir
 			}
 			return nil
@@ -747,6 +744,16 @@ func workspaceKnowledgeSourceKind(path string) string {
 	default:
 		return ""
 	}
+}
+
+func isInternalWorkspaceKnowledgeDir(workspaceRoot, path string) bool {
+	normalizedPath := normalizeWorkspaceKnowledgeAbsolutePath(path)
+	for _, dirName := range []string{"raw", "schema", "sources", "inputs", "state", "wiki"} {
+		if normalizedPath == normalizeWorkspaceKnowledgeAbsolutePath(filepath.Join(workspaceRoot, dirName)) {
+			return true
+		}
+	}
+	return false
 }
 
 func workspaceKnowledgeStableSourceKey(workspaceRoot string, candidate workspaceKnowledgeScanCandidate) (string, error) {
