@@ -62,3 +62,103 @@ func TestRetrieveWorkspaceKnowledgeEvidencePrefersWikiBeforeStateAndInputs(t *te
 		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "wiki_page")
 	}
 }
+
+func TestRetrieveWorkspaceKnowledgeEvidenceFallsBackToStateBeforeInputs(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		t.Fatalf("IndexPath() error = %v", err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Index\n\nNo matching wiki evidence here.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(indexPath) error = %v", err)
+	}
+
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(entitiesPath, []WorkspaceKnowledgeEntity{{
+		ID:          "entity:transformer",
+		WorkspaceID: "workspace-a",
+		Title:       "Transformer",
+		Summary:     "Transformer is the state-backed match for this query.",
+	}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(entitiesPath) error = %v", err)
+	}
+
+	markItDownPath, err := files.MarkItDownPath("paper-a")
+	if err != nil {
+		t.Fatalf("MarkItDownPath() error = %v", err)
+	}
+	if err := os.WriteFile(markItDownPath, []byte("# Transformer\n\nInput markdown also mentions transformer.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(markItDownPath) error = %v", err)
+	}
+
+	evidence, err := retrieveWorkspaceKnowledgeEvidence(files, "What is a transformer?")
+	if err != nil {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() error = %v", err)
+	}
+	if len(evidence) == 0 {
+		t.Fatal("retrieveWorkspaceKnowledgeEvidence() returned no evidence")
+	}
+	if evidence[0].Kind != "entity" {
+		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "entity")
+	}
+}
+
+func TestRetrieveWorkspaceKnowledgeEvidenceFallsBackToInputsAfterWikiAndStateMiss(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		t.Fatalf("IndexPath() error = %v", err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Index\n\nNo matching wiki evidence here.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(indexPath) error = %v", err)
+	}
+
+	entitiesPath, err := files.EntitiesPath()
+	if err != nil {
+		t.Fatalf("EntitiesPath() error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(entitiesPath, []WorkspaceKnowledgeEntity{{
+		ID:          "entity:attention",
+		WorkspaceID: "workspace-a",
+		Title:       "Attention",
+		Summary:     "State evidence here is unrelated to the query topic.",
+	}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(entitiesPath) error = %v", err)
+	}
+
+	markItDownPath, err := files.MarkItDownPath("paper-a")
+	if err != nil {
+		t.Fatalf("MarkItDownPath() error = %v", err)
+	}
+	if err := os.WriteFile(markItDownPath, []byte("# Convolution\n\nA convolution combines local receptive fields in the input evidence.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(markItDownPath) error = %v", err)
+	}
+
+	evidence, err := retrieveWorkspaceKnowledgeEvidence(files, "What is convolution?")
+	if err != nil {
+		t.Fatalf("retrieveWorkspaceKnowledgeEvidence() error = %v", err)
+	}
+	if len(evidence) == 0 {
+		t.Fatal("retrieveWorkspaceKnowledgeEvidence() returned no evidence")
+	}
+	if evidence[0].Kind != "extract" {
+		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "extract")
+	}
+}

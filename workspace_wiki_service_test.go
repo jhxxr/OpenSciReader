@@ -136,12 +136,26 @@ func TestStartWorkspaceWikiScanPersistsSourceProcessingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadCompileSummary() error = %v", err)
 	}
+	indexPath, err := files.IndexPath()
+	if err != nil {
+		t.Fatalf("IndexPath() error = %v", err)
+	}
+	if !containsString(summary.UpdatedWikiPaths, indexPath) {
+		t.Fatalf("compile summary UpdatedWikiPaths = %#v, want to contain %q", summary.UpdatedWikiPaths, indexPath)
+	}
 	overviewPath, err := files.OverviewPath()
 	if err != nil {
 		t.Fatalf("OverviewPath() error = %v", err)
 	}
 	if !containsString(summary.UpdatedWikiPaths, overviewPath) {
 		t.Fatalf("compile summary UpdatedWikiPaths = %#v, want to contain %q", summary.UpdatedWikiPaths, overviewPath)
+	}
+	logPath, err := files.LogPath()
+	if err != nil {
+		t.Fatalf("LogPath() error = %v", err)
+	}
+	if !containsString(summary.UpdatedWikiPaths, logPath) {
+		t.Fatalf("compile summary UpdatedWikiPaths = %#v, want to contain %q", summary.UpdatedWikiPaths, logPath)
 	}
 }
 
