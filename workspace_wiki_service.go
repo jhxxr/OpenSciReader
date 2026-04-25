@@ -610,7 +610,15 @@ func (r *workspaceWikiScanRunner) removeStaleSourceArtifacts(files workspaceKnow
 	if err != nil {
 		return err
 	}
-	return removeWorkspaceKnowledgeArtifactsNotInSet(bySourceDir, ".json", currentSlugs)
+	if err := removeWorkspaceKnowledgeArtifactsNotInSet(bySourceDir, ".json", currentSlugs); err != nil {
+		return err
+	}
+
+	legacyBySourceDir, err := files.legacyBySourceDir()
+	if err != nil {
+		return err
+	}
+	return removeWorkspaceKnowledgeArtifactsNotInSet(legacyBySourceDir, ".json", currentSlugs)
 }
 
 func (r *workspaceWikiScanRunner) saveJob(ctx context.Context, job WorkspaceWikiScanJob, status WorkspaceWikiScanJobStatus, stage, message string, finished bool) WorkspaceWikiScanJob {

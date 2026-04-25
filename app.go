@@ -273,7 +273,10 @@ func (a *App) DeleteWorkspaceWikiPages(workspaceID string) error {
 			return fmt.Errorf("remove workspace wiki page file: %w", err)
 		}
 	}
-	return a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID)
+	if err := a.store.DeleteWorkspaceWikiPagesByWorkspace(a.ctx, workspaceID); err != nil {
+		return err
+	}
+	return files.DeleteCompileSummary()
 }
 
 func (a *App) ListWorkspaceKnowledgeSources(workspaceID string) ([]WorkspaceKnowledgeSource, error) {

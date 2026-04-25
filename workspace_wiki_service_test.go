@@ -406,6 +406,13 @@ func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
 	if err := store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, []WorkspaceWikiPage{overviewPage, documentPage}); err != nil {
 		t.Fatalf("ReplaceWorkspaceWikiPages() error = %v", err)
 	}
+	if err := files.WriteCompileSummary(WorkspaceKnowledgeCompileSummary{
+		WorkspaceID:       workspace.ID,
+		IncludedSourceIDs: []string{"source:paper-a"},
+		UpdatedWikiPaths:  []string{overviewPath, docPath},
+	}); err != nil {
+		t.Fatalf("WriteCompileSummary() error = %v", err)
+	}
 
 	app := &App{ctx: ctx, paths: paths, store: store}
 	if err := app.DeleteWorkspaceWikiPages(workspace.ID); err != nil {
@@ -424,6 +431,61 @@ func TestDeleteWorkspaceWikiPagesRemovesGeneratedWikiSurface(t *testing.T) {
 	}
 	if len(pages) != 0 {
 		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 0", len(pages))
+	}
+
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		t.Fatalf("ReadCompileSummary() after deletion error = %v", err)
+	}
+	if !summary.CompileDirty {
+		t.Fatalf("summary.CompileDirty after deletion = %v, want true", summary.CompileDirty)
+	}
+	if !summary.WikiDirty {
+		t.Fatalf("summary.WikiDirty after deletion = %v, want true", summary.WikiDirty)
+	}
+}
+
+func TestRemoveStaleSourceArtifactsPrunesLegacyBySourcePayloadsOnFullScan(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	keptLegacyPath, err := files.legacyBySourcePath("paper-a")
+	if err != nil {
+		t.Fatalf("legacyBySourcePath(paper-a) error = %v", err)
+	}
+	staleLegacyPath, err := files.legacyBySourcePath("paper-b")
+	if err != nil {
+		t.Fatalf("legacyBySourcePath(paper-b) error = %v", err)
+	}
+
+	for path, payload := range map[string]WorkspaceKnowledgeBySourcePayload{
+		keptLegacyPath: {
+			Source: WorkspaceKnowledgeSource{ID: "source:paper-a", WorkspaceID: "workspace-a", Title: "Paper A", Slug: "paper-a", Kind: "pdf"},
+		},
+		staleLegacyPath: {
+			Source: WorkspaceKnowledgeSource{ID: "source:paper-b", WorkspaceID: "workspace-a", Title: "Paper B", Slug: "paper-b", Kind: "pdf"},
+		},
+	} {
+		if err := writeWorkspaceKnowledgeJSON(path, payload); err != nil {
+			t.Fatalf("writeWorkspaceKnowledgeJSON(%q) error = %v", path, err)
+		}
+	}
+
+	runner := &workspaceWikiScanRunner{}
+	if err := runner.removeStaleSourceArtifacts(files, []WorkspaceKnowledgeSource{{Slug: "paper-a"}}); err != nil {
+		t.Fatalf("removeStaleSourceArtifacts() error = %v", err)
+	}
+
+	if _, err := os.Stat(keptLegacyPath); err != nil {
+		t.Fatalf("Stat(keptLegacyPath) error = %v, want present", err)
+	}
+	if _, err := os.Stat(staleLegacyPath); !os.IsNotExist(err) {
+		t.Fatalf("Stat(staleLegacyPath) error = %v, want not exist", err)
 	}
 }
 
