@@ -158,7 +158,7 @@ func TestRetrieveWorkspaceKnowledgeEvidenceFallsBackToInputsAfterWikiAndStateMis
 	if len(evidence) == 0 {
 		t.Fatal("retrieveWorkspaceKnowledgeEvidence() returned no evidence")
 	}
-	if evidence[0].Kind != "extract" {
-		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "extract")
+	if evidence[0].Kind != "raw_excerpt" {
+		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "raw_excerpt")
 	}
 }

@@ -109,3 +109,39 @@ func TestWorkspaceKnowledgeFilesUsesSourcesInputsStateLayout(t *testing.T) {
 		t.Fatalf("OpenQuestionsPath() = %q, want %q", openQuestionsPath, want)
 	}
 }
+
+func TestWorkspaceKnowledgeFilesReadSourcesFallsBackToLegacyRawLayout(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	workspaceRoot, err := files.workspaceRootDir()
+	if err != nil {
+		t.Fatalf("workspaceRootDir() error = %v", err)
+	}
+	legacyPath := filepath.Join(workspaceRoot, "raw", "sources.json")
+	if err := writeWorkspaceKnowledgeJSON(legacyPath, []WorkspaceKnowledgeSource{{
+		ID:          "source:paper-a",
+		WorkspaceID: "workspace-a",
+		Title:       "Paper A",
+		Slug:        "paper-a",
+		Kind:        "pdf",
+	}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(legacyPath) error = %v", err)
+	}
+
+	sources, err := files.ReadSources()
+	if err != nil {
+		t.Fatalf("ReadSources() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("ReadSources() len = %d, want 1", len(sources))
+	}
+	if sources[0].ID != "source:paper-a" {
+		t.Fatalf("sources[0].ID = %q, want %q", sources[0].ID, "source:paper-a")
+	}
+}

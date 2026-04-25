@@ -620,7 +620,7 @@ func retrieveWorkspaceKnowledgeInputEvidence(files workspaceKnowledgeFiles, ques
 		slug := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 		candidates = append(candidates, workspaceKnowledgeEvidenceCandidate{
 			hit: WorkspaceKnowledgeEvidenceHit{
-				Kind:       "extract",
+				Kind:       "raw_excerpt",
 				ID:         "extract:" + slug,
 				Title:      workspaceKnowledgeReadableTitle(slug),
 				Summary:    firstWorkspaceKnowledgeMarkdownLine(trimmed),

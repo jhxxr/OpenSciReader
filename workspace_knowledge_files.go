@@ -86,18 +86,29 @@ func (f workspaceKnowledgeFiles) BySourcePaths() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	legacyBySourceDir, err := f.legacyBySourceDir()
+	if err != nil {
+		return nil, err
+	}
 
-	entries, err := os.ReadDir(bySourceDir)
+	paths, err := workspaceKnowledgeJSONPaths(bySourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("read workspace knowledge by-source directory %s: %w", bySourceDir, err)
 	}
+	legacyPaths, err := workspaceKnowledgeJSONPaths(legacyBySourceDir)
+	if err != nil {
+		return nil, fmt.Errorf("read workspace knowledge legacy by-source directory %s: %w", legacyBySourceDir, err)
+	}
 
-	paths := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		seen[filepath.Base(path)] = struct{}{}
+	}
+	for _, path := range legacyPaths {
+		if _, ok := seen[filepath.Base(path)]; ok {
 			continue
 		}
-		paths = append(paths, filepath.Join(bySourceDir, entry.Name()))
+		paths = append(paths, path)
 	}
 	return paths, nil
 }
@@ -131,16 +142,21 @@ func (f workspaceKnowledgeFiles) ReadSources() ([]WorkspaceKnowledgeSource, erro
 	if err != nil {
 		return nil, err
 	}
+	legacySourcesPath, err := f.legacySourcesPath()
+	if err != nil {
+		return nil, err
+	}
 
-	if _, err := os.Stat(sourcesPath); err != nil {
-		if os.IsNotExist(err) {
-			return []WorkspaceKnowledgeSource{}, nil
-		}
+	readPath, err := workspaceKnowledgeFirstExistingPath(sourcesPath, legacySourcesPath)
+	if err != nil {
 		return nil, fmt.Errorf("stat workspace knowledge sources: %w", err)
+	}
+	if readPath == "" {
+		return []WorkspaceKnowledgeSource{}, nil
 	}
 
 	var sources []WorkspaceKnowledgeSource
-	if err := readWorkspaceKnowledgeJSON(sourcesPath, &sources); err != nil {
+	if err := readWorkspaceKnowledgeJSON(readPath, &sources); err != nil {
 		return nil, err
 	}
 	if sources == nil {
@@ -200,6 +216,10 @@ func (f workspaceKnowledgeFiles) ReadCompileSummary() (WorkspaceKnowledgeCompile
 	if summary.UpdatedWikiPaths == nil {
 		summary.UpdatedWikiPaths = []string{}
 	}
+	if len(summary.FailedSourceIDs) > 0 {
+		summary.CompileDirty = true
+		summary.WikiDirty = true
+	}
 	return summary, nil
 }
 
@@ -216,9 +236,20 @@ func (f workspaceKnowledgeFiles) ReadBySource(sourceSlug string) (WorkspaceKnowl
 	if err != nil {
 		return WorkspaceKnowledgeBySourcePayload{}, err
 	}
+	legacyBySourcePath, err := f.legacyBySourcePath(sourceSlug)
+	if err != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, err
+	}
+	readPath, err := workspaceKnowledgeFirstExistingPath(bySourcePath, legacyBySourcePath)
+	if err != nil {
+		return WorkspaceKnowledgeBySourcePayload{}, fmt.Errorf("stat workspace knowledge by-source payload: %w", err)
+	}
+	if readPath == "" {
+		return WorkspaceKnowledgeBySourcePayload{}, fmt.Errorf("read workspace knowledge json %s: %w", bySourcePath, os.ErrNotExist)
+	}
 
 	var payload WorkspaceKnowledgeBySourcePayload
-	if err := readWorkspaceKnowledgeJSON(bySourcePath, &payload); err != nil {
+	if err := readWorkspaceKnowledgeJSON(readPath, &payload); err != nil {
 		return WorkspaceKnowledgeBySourcePayload{}, err
 	}
 	return payload, nil
@@ -398,6 +429,14 @@ func (f workspaceKnowledgeFiles) rawDir() (string, error) {
 	return f.sourcesDir()
 }
 
+func (f workspaceKnowledgeFiles) legacyRawDir() (string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workspaceRootDir, "raw"), nil
+}
+
 func (f workspaceKnowledgeFiles) sourcesDir() (string, error) {
 	workspaceRootDir, err := f.workspaceRootDir()
 	if err != nil {
@@ -430,6 +469,14 @@ func (f workspaceKnowledgeFiles) schemaDir() (string, error) {
 	return f.stateDir()
 }
 
+func (f workspaceKnowledgeFiles) legacySchemaDir() (string, error) {
+	workspaceRootDir, err := f.workspaceRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workspaceRootDir, "schema"), nil
+}
+
 func (f workspaceKnowledgeFiles) stateDir() (string, error) {
 	workspaceRootDir, err := f.workspaceRootDir()
 	if err != nil {
@@ -444,6 +491,34 @@ func (f workspaceKnowledgeFiles) bySourceDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(stateDir, "by-source"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacyBySourceDir() (string, error) {
+	schemaDir, err := f.legacySchemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(schemaDir, "by-source"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacySourcesPath() (string, error) {
+	legacyRawDir, err := f.legacyRawDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacyRawDir, "sources.json"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacyBySourcePath(sourceSlug string) (string, error) {
+	legacyBySourceDir, err := f.legacyBySourceDir()
+	if err != nil {
+		return "", err
+	}
+	validatedSourceSlug, err := validateWorkspaceKnowledgePathSegment("source slug", sourceSlug)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacyBySourceDir, validatedSourceSlug+".json"), nil
 }
 
 func (f workspaceKnowledgeFiles) scanRunsDir() (string, error) {
@@ -497,4 +572,37 @@ func validateWorkspaceKnowledgePathSegment(name, value string) (string, error) {
 		return "", fmt.Errorf("%s must not contain Windows-invalid filename characters", name)
 	}
 	return trimmedValue, nil
+}
+
+func workspaceKnowledgeJSONPaths(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, entry.Name()))
+	}
+	return paths, nil
+}
+
+func workspaceKnowledgeFirstExistingPath(paths ...string) (string, error) {
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", nil
 }

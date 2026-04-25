@@ -775,6 +775,7 @@ func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, worksp
 	for _, source := range snapshot.Sources {
 		includedSourceIDs = append(includedSourceIDs, source.ID)
 	}
+	dirty := len(failedSourceIDs) > 0
 
 	return WorkspaceKnowledgeCompileSummary{
 		WorkspaceID:       strings.TrimSpace(workspaceID),
@@ -783,8 +784,8 @@ func buildWorkspaceKnowledgeCompileSummary(files workspaceKnowledgeFiles, worksp
 		IncludedSourceIDs: includedSourceIDs,
 		FailedSourceIDs:   append([]string(nil), failedSourceIDs...),
 		UpdatedWikiPaths:  updatedWikiPaths,
-		CompileDirty:      false,
-		WikiDirty:         false,
+		CompileDirty:      dirty,
+		WikiDirty:         dirty,
 	}, nil
 }
 

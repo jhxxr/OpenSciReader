@@ -407,6 +407,27 @@ func TestBuildWorkspaceKnowledgeCompileSummaryIncludesDeletedWikiPaths(t *testin
 	}
 }
 
+func TestBuildWorkspaceKnowledgeCompileSummaryMarksDirtyWhenSourcesFail(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	summary, err := buildWorkspaceKnowledgeCompileSummary(files, "workspace-a", "started", WorkspaceKnowledgeSnapshot{}, []string{"source:paper-a"}, nil)
+	if err != nil {
+		t.Fatalf("buildWorkspaceKnowledgeCompileSummary() error = %v", err)
+	}
+	if !summary.CompileDirty {
+		t.Fatalf("summary.CompileDirty = %v, want true", summary.CompileDirty)
+	}
+	if !summary.WikiDirty {
+		t.Fatalf("summary.WikiDirty = %v, want true", summary.WikiDirty)
+	}
+}
+
 func TestWorkspaceWikiScanInterruptedRerunPreservesUntouchedSourceState(t *testing.T) {
 	t.Parallel()
 
