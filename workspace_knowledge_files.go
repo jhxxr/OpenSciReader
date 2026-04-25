@@ -203,7 +203,11 @@ func (f workspaceKnowledgeFiles) TasksPath() (string, error) {
 }
 
 func (f workspaceKnowledgeFiles) OverviewPath() (string, error) {
-	return f.IndexPath()
+	wikiDir, err := f.wikiDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(wikiDir, "overview.md"), nil
 }
 
 func (f workspaceKnowledgeFiles) IndexPath() (string, error) {
@@ -215,7 +219,11 @@ func (f workspaceKnowledgeFiles) IndexPath() (string, error) {
 }
 
 func (f workspaceKnowledgeFiles) OpenQuestionsPath() (string, error) {
-	return f.LogPath()
+	wikiDir, err := f.wikiDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(wikiDir, "open-questions.md"), nil
 }
 
 func (f workspaceKnowledgeFiles) LogPath() (string, error) {

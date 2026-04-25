@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -21,6 +22,36 @@ func TestWorkspaceKnowledgeFilesUsesSourcesInputsStateLayout(t *testing.T) {
 	}
 
 	workspaceRoot := filepath.Join(paths.WorkspacesRootDir, "workspace-a")
+	requiredDirs := []string{
+		filepath.Join(workspaceRoot, "sources"),
+		filepath.Join(workspaceRoot, "sources", "pdfs"),
+		filepath.Join(workspaceRoot, "inputs"),
+		filepath.Join(workspaceRoot, "inputs", "markitdown"),
+		filepath.Join(workspaceRoot, "inputs", "manifests"),
+		filepath.Join(workspaceRoot, "state"),
+		filepath.Join(workspaceRoot, "state", "by-source"),
+		filepath.Join(workspaceRoot, "state", "jobs"),
+		filepath.Join(workspaceRoot, "wiki"),
+		filepath.Join(workspaceRoot, "wiki", "docs"),
+		filepath.Join(workspaceRoot, "wiki", "concepts"),
+	}
+	for _, dir := range requiredDirs {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("expected directory %q: %v", dir, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("expected %q to be a directory", dir)
+		}
+	}
+
+	sourcesManifestPath, err := files.SourcesManifestPath()
+	if err != nil {
+		t.Fatalf("SourcesManifestPath() error = %v", err)
+	}
+	if want := filepath.Join(workspaceRoot, "state", "sources.json"); sourcesManifestPath != want {
+		t.Fatalf("SourcesManifestPath() = %q, want %q", sourcesManifestPath, want)
+	}
 
 	markItDownPath, err := files.MarkItDownPath("paper-a")
 	if err != nil {
@@ -60,5 +91,21 @@ func TestWorkspaceKnowledgeFilesUsesSourcesInputsStateLayout(t *testing.T) {
 	}
 	if want := filepath.Join(workspaceRoot, "wiki", "log.md"); logPath != want {
 		t.Fatalf("LogPath() = %q, want %q", logPath, want)
+	}
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		t.Fatalf("OverviewPath() error = %v", err)
+	}
+	if want := filepath.Join(workspaceRoot, "wiki", "overview.md"); overviewPath != want {
+		t.Fatalf("OverviewPath() = %q, want %q", overviewPath, want)
+	}
+
+	openQuestionsPath, err := files.OpenQuestionsPath()
+	if err != nil {
+		t.Fatalf("OpenQuestionsPath() error = %v", err)
+	}
+	if want := filepath.Join(workspaceRoot, "wiki", "open-questions.md"); openQuestionsPath != want {
+		t.Fatalf("OpenQuestionsPath() = %q, want %q", openQuestionsPath, want)
 	}
 }
