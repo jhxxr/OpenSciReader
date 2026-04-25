@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type workspaceKnowledgeExtractor interface {
@@ -323,6 +324,9 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if err := files.WriteCompileSummary(compileSummary); err != nil {
 		return err
 	}
+	if err := replaceWorkspaceWikiPagesFromGeneratedFiles(ctx, r.store, workspace, files, snapshot.Sources); err != nil {
+		return err
+	}
 
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
 		ID:          strings.TrimSpace(job.JobID),
@@ -333,6 +337,68 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 		SourceIDs:   sourceIDs,
 		Message:     workspaceKnowledgeScanMessage(len(sources), failureCount, skippedCount),
 	})
+}
+
+func replaceWorkspaceWikiPagesFromGeneratedFiles(ctx context.Context, store *configStore, workspace Workspace, files workspaceKnowledgeFiles, sources []WorkspaceKnowledgeSource) error {
+	if store == nil {
+		return fmt.Errorf("config store is unavailable")
+	}
+	pages, err := buildWorkspaceWikiPagesFromGeneratedFiles(workspace, files, sources)
+	if err != nil {
+		return err
+	}
+	return store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages)
+}
+
+func buildWorkspaceWikiPagesFromGeneratedFiles(workspace Workspace, files workspaceKnowledgeFiles, sources []WorkspaceKnowledgeSource) ([]WorkspaceWikiPage, error) {
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return nil, err
+	}
+	overviewPage, err := newWorkspaceWikiPageRecord(workspace, overviewPath, WorkspaceWikiPageOverview, "overview", "")
+	if err != nil {
+		return nil, err
+	}
+
+	pages := make([]WorkspaceWikiPage, 0, len(sources)+1)
+	pages = append(pages, overviewPage)
+	for _, source := range sources {
+		documentPath, err := files.DocumentWikiPath(source.Slug)
+		if err != nil {
+			return nil, err
+		}
+		page, err := newWorkspaceWikiPageRecord(workspace, documentPath, WorkspaceWikiPageDocument, source.Slug, strings.TrimSpace(source.DocumentID))
+		if err != nil {
+			return nil, err
+		}
+		page.Title = firstNonEmptyText(strings.TrimSpace(source.Title), strings.TrimSpace(source.Slug))
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+func newWorkspaceWikiPageRecord(workspace Workspace, markdownPath string, kind WorkspaceWikiPageKind, slug, sourceDocumentID string) (WorkspaceWikiPage, error) {
+	info, err := os.Stat(markdownPath)
+	if err != nil {
+		return WorkspaceWikiPage{}, fmt.Errorf("stat generated workspace wiki page %s: %w", markdownPath, err)
+	}
+	updatedAt := info.ModTime().UTC().Format(time.RFC3339)
+	title := strings.TrimSpace(slug)
+	if kind == WorkspaceWikiPageOverview {
+		title = "Overview"
+	}
+	return WorkspaceWikiPage{
+		ID:               fmt.Sprintf("%s:%s:%s", strings.TrimSpace(workspace.ID), kind, strings.TrimSpace(slug)),
+		WorkspaceID:      strings.TrimSpace(workspace.ID),
+		SourceDocumentID: strings.TrimSpace(sourceDocumentID),
+		Title:            title,
+		Slug:             strings.TrimSpace(slug),
+		Kind:             kind,
+		MarkdownPath:     markdownPath,
+		Summary:          "",
+		CreatedAt:        updatedAt,
+		UpdatedAt:        updatedAt,
+	}, nil
 }
 
 func (r *workspaceWikiScanRunner) collectSources(ctx context.Context, workspace Workspace, documentID string, files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeSource, error) {

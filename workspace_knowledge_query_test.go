@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -160,5 +161,61 @@ func TestRetrieveWorkspaceKnowledgeEvidenceFallsBackToInputsAfterWikiAndStateMis
 	}
 	if evidence[0].Kind != "raw_excerpt" {
 		t.Fatalf("evidence[0].Kind = %q, want %q", evidence[0].Kind, "raw_excerpt")
+	}
+}
+
+func TestPromoteMarksCompileSummaryDirtyWhenClaimsChange(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+	if err := files.WriteCompileSummary(WorkspaceKnowledgeCompileSummary{
+		WorkspaceID:       "workspace-a",
+		IncludedSourceIDs: []string{"source:paper-a"},
+		FailedSourceIDs:   []string{},
+		UpdatedWikiPaths:  []string{"wiki/overview.md"},
+		CompileDirty:      false,
+		WikiDirty:         false,
+	}); err != nil {
+		t.Fatalf("WriteCompileSummary() error = %v", err)
+	}
+	claimsPath, err := files.ClaimsPath()
+	if err != nil {
+		t.Fatalf("ClaimsPath() error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(claimsPath, []WorkspaceKnowledgeClaim{}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(claims) error = %v", err)
+	}
+
+	service := &workspaceKnowledgeQueryService{paths: paths, files: files}
+	err = service.Promote(context.Background(), WorkspaceKnowledgePromotionInput{
+		WorkspaceID: "workspace-a",
+		Candidates: []WorkspaceKnowledgeCandidate{{
+			ID:        "candidate:claim:attention",
+			Title:     "Attention claim",
+			Type:      "claim",
+			Summary:   "Promoted from query output.",
+			SourceID:  "source:paper-a",
+			PageStart: 1,
+			PageEnd:   1,
+			Excerpt:   "Attention improves sequence modeling.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Promote() error = %v", err)
+	}
+
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		t.Fatalf("ReadCompileSummary() error = %v", err)
+	}
+	if !summary.CompileDirty {
+		t.Fatalf("summary.CompileDirty = %v, want true", summary.CompileDirty)
+	}
+	if !summary.WikiDirty {
+		t.Fatalf("summary.WikiDirty = %v, want true", summary.WikiDirty)
 	}
 }

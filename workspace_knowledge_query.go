@@ -187,6 +187,9 @@ func (s *workspaceKnowledgeQueryService) Promote(_ context.Context, input Worksp
 		if err := writeWorkspaceKnowledgeJSON(claimsPath, claims); err != nil {
 			return err
 		}
+		if err := markWorkspaceKnowledgeCompileSummaryDirty(files, workspaceID); err != nil {
+			return err
+		}
 	}
 
 	appendWorkspaceKnowledgeConversationLogBestEffort(files, workspaceKnowledgeConversationLogEntry{
@@ -328,9 +331,13 @@ func readWorkspaceKnowledgeEntities(files workspaceKnowledgeFiles) ([]WorkspaceK
 	if err != nil {
 		return nil, err
 	}
+	legacyEntitiesPath, err := files.legacyEntitiesPath()
+	if err != nil {
+		return nil, err
+	}
 
 	var entities []WorkspaceKnowledgeEntity
-	if err := readWorkspaceKnowledgeOptionalJSON(entitiesPath, &entities); err != nil {
+	if err := readWorkspaceKnowledgeOptionalJSONWithFallback([]string{entitiesPath, legacyEntitiesPath}, &entities); err != nil {
 		return nil, err
 	}
 	if entities == nil {
@@ -347,9 +354,13 @@ func readWorkspaceKnowledgeClaims(files workspaceKnowledgeFiles) ([]WorkspaceKno
 	if err != nil {
 		return nil, err
 	}
+	legacyClaimsPath, err := files.legacyClaimsPath()
+	if err != nil {
+		return nil, err
+	}
 
 	var claims []WorkspaceKnowledgeClaim
-	if err := readWorkspaceKnowledgeOptionalJSON(claimsPath, &claims); err != nil {
+	if err := readWorkspaceKnowledgeOptionalJSONWithFallback([]string{claimsPath, legacyClaimsPath}, &claims); err != nil {
 		return nil, err
 	}
 	if claims == nil {
@@ -366,9 +377,13 @@ func readWorkspaceKnowledgeTasks(files workspaceKnowledgeFiles) ([]WorkspaceKnow
 	if err != nil {
 		return nil, err
 	}
+	legacyTasksPath, err := files.legacyTasksPath()
+	if err != nil {
+		return nil, err
+	}
 
 	var tasks []WorkspaceKnowledgeTask
-	if err := readWorkspaceKnowledgeOptionalJSON(tasksPath, &tasks); err != nil {
+	if err := readWorkspaceKnowledgeOptionalJSONWithFallback([]string{tasksPath, legacyTasksPath}, &tasks); err != nil {
 		return nil, err
 	}
 	if tasks == nil {
@@ -381,13 +396,54 @@ func readWorkspaceKnowledgeTasks(files workspaceKnowledgeFiles) ([]WorkspaceKnow
 }
 
 func readWorkspaceKnowledgeOptionalJSON(path string, target any) error {
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat workspace knowledge file %s: %w", path, err)
+	return readWorkspaceKnowledgeOptionalJSONWithFallback([]string{path}, target)
+}
+
+func readWorkspaceKnowledgeOptionalJSONWithFallback(paths []string, target any) error {
+	readPath, err := workspaceKnowledgeFirstExistingPath(paths...)
+	if err != nil {
+		return fmt.Errorf("stat workspace knowledge file: %w", err)
 	}
-	return readWorkspaceKnowledgeJSON(path, target)
+	if strings.TrimSpace(readPath) == "" {
+		return nil
+	}
+	return readWorkspaceKnowledgeJSON(readPath, target)
+}
+
+func markWorkspaceKnowledgeCompileSummaryDirty(files workspaceKnowledgeFiles, workspaceID string) error {
+	summary, err := files.ReadCompileSummary()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(summary.WorkspaceID) == "" {
+		summary.WorkspaceID = strings.TrimSpace(workspaceID)
+	}
+	summary.CompileDirty = true
+	summary.WikiDirty = true
+	return files.WriteCompileSummary(summary)
+}
+
+func readWorkspaceKnowledgeRelations(files workspaceKnowledgeFiles) ([]WorkspaceKnowledgeRelation, error) {
+	relationsPath, err := files.RelationsPath()
+	if err != nil {
+		return nil, err
+	}
+	legacyRelationsPath, err := files.legacyRelationsPath()
+	if err != nil {
+		return nil, err
+	}
+
+	var relations []WorkspaceKnowledgeRelation
+	if err := readWorkspaceKnowledgeOptionalJSONWithFallback([]string{relationsPath, legacyRelationsPath}, &relations); err != nil {
+		return nil, err
+	}
+	if relations == nil {
+		return []WorkspaceKnowledgeRelation{}, nil
+	}
+	sort.Slice(relations, func(i, j int) bool {
+		return lessRelation(relations[i], relations[j])
+	})
+	return relations, nil
 }
 
 func retrieveWorkspaceKnowledgeEvidence(files workspaceKnowledgeFiles, question string) ([]WorkspaceKnowledgeEvidenceHit, error) {

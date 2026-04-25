@@ -521,6 +521,38 @@ func (f workspaceKnowledgeFiles) legacyBySourcePath(sourceSlug string) (string, 
 	return filepath.Join(legacyBySourceDir, validatedSourceSlug+".json"), nil
 }
 
+func (f workspaceKnowledgeFiles) legacyEntitiesPath() (string, error) {
+	legacySchemaDir, err := f.legacySchemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacySchemaDir, "entities.json"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacyClaimsPath() (string, error) {
+	legacySchemaDir, err := f.legacySchemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacySchemaDir, "claims.json"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacyRelationsPath() (string, error) {
+	legacySchemaDir, err := f.legacySchemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacySchemaDir, "relations.json"), nil
+}
+
+func (f workspaceKnowledgeFiles) legacyTasksPath() (string, error) {
+	legacySchemaDir, err := f.legacySchemaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(legacySchemaDir, "tasks.json"), nil
+}
+
 func (f workspaceKnowledgeFiles) scanRunsDir() (string, error) {
 	return f.jobsDir()
 }

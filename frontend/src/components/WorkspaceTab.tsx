@@ -5,6 +5,10 @@ import { Button } from './ui/Button';
 import type { ProviderConfig } from '../types/config';
 import type { DocumentRecord, Workspace } from '../types/workspace';
 import type {
+  WorkspaceKnowledgeCompileSummary,
+  WorkspaceKnowledgeSource,
+} from '../types/workspaceKnowledge';
+import type {
   WorkspaceWikiPage,
   WorkspaceWikiPageContent,
   WorkspaceWikiScanJob,
@@ -29,6 +33,8 @@ interface WorkspaceTabProps {
   isDeletingWikiPages: boolean;
   wikiScanProviderId: number;
   wikiScanModelId: number;
+  wikiSources: WorkspaceKnowledgeSource[];
+  compileSummary: WorkspaceKnowledgeCompileSummary | null;
   onStartWikiScan: (providerId: number, modelId: number) => Promise<void>;
   onCancelWikiScan: () => Promise<void>;
   onRefreshWikiPages: () => Promise<void>;
@@ -60,6 +66,8 @@ export function WorkspaceTab({
   isDeletingWikiPages,
   wikiScanProviderId,
   wikiScanModelId,
+  wikiSources,
+  compileSummary,
   onStartWikiScan,
   onCancelWikiScan,
   onRefreshWikiPages,
@@ -123,6 +131,7 @@ export function WorkspaceTab({
       ? wikiPageContent.page
       : wikiPages.find((page) => page.id === selectedWikiPageId) ?? wikiPageContent?.page ?? null;
   const activeProgress = Math.max(0, Math.min(100, (activeWikiJob?.overallProgress ?? 0) * 100));
+  const failedSourceCount = compileSummary?.failedSourceIds?.length ?? 0;
 
   if (!workspace) {
     return (
@@ -303,6 +312,31 @@ export function WorkspaceTab({
             )}
 
             {wikiError ? <div className="reader-error">{wikiError}</div> : null}
+
+            <div className="workspace-knowledge-status-block">
+              <div className="workspace-knowledge-status-head">
+                <strong>Source Build Status</strong>
+                <span className="badge badge-count">{wikiSources.length}</span>
+              </div>
+              <div className="workspace-knowledge-status-meta">
+                <span>Compile dirty: {compileSummary?.compileDirty ? 'yes' : 'no'}</span>
+                <span>Wiki dirty: {compileSummary?.wikiDirty ? 'yes' : 'no'}</span>
+                <span>Failed: {failedSourceCount}</span>
+              </div>
+              {wikiSources.length > 0 ? (
+                <div className="workspace-knowledge-source-list">
+                  {wikiSources.map((source) => (
+                    <div key={source.sourceId} className="workspace-knowledge-source-row">
+                      <strong>{source.title}</strong>
+                      <span>markitdown {source.markItDownStatus}</span>
+                      <span>extract {source.extractStatus}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-inline">No scanned sources yet.</p>
+              )}
+            </div>
           </div>
 
           <div className="workspace-panel workspace-wiki-content-panel">

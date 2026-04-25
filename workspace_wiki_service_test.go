@@ -157,6 +157,39 @@ func TestStartWorkspaceWikiScanPersistsSourceProcessingState(t *testing.T) {
 	if !containsString(summary.UpdatedWikiPaths, logPath) {
 		t.Fatalf("compile summary UpdatedWikiPaths = %#v, want to contain %q", summary.UpdatedWikiPaths, logPath)
 	}
+
+	pages, err := store.ListWorkspaceWikiPages(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceWikiPages() error = %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("ListWorkspaceWikiPages() len = %d, want 2", len(pages))
+	}
+	if pages[0].Kind != WorkspaceWikiPageOverview {
+		t.Fatalf("pages[0].Kind = %q, want %q", pages[0].Kind, WorkspaceWikiPageOverview)
+	}
+	if pages[0].Slug != "overview" {
+		t.Fatalf("pages[0].Slug = %q, want %q", pages[0].Slug, "overview")
+	}
+	if pages[1].Kind != WorkspaceWikiPageDocument {
+		t.Fatalf("pages[1].Kind = %q, want %q", pages[1].Kind, WorkspaceWikiPageDocument)
+	}
+	if pages[1].SourceDocumentID != importResult.Documents[0].ID {
+		t.Fatalf("pages[1].SourceDocumentID = %q, want %q", pages[1].SourceDocumentID, importResult.Documents[0].ID)
+	}
+	if pages[1].Slug == "" {
+		t.Fatal("pages[1].Slug = empty, want document slug")
+	}
+	page, err := store.GetWorkspaceWikiPage(ctx, pages[1].ID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceWikiPage() error = %v", err)
+	}
+	if page.MarkdownPath == "" {
+		t.Fatal("GetWorkspaceWikiPage().MarkdownPath = empty, want generated markdown path")
+	}
+	if _, err := os.Stat(page.MarkdownPath); err != nil {
+		t.Fatalf("Stat(page.MarkdownPath) error = %v", err)
+	}
 }
 
 func TestStartWorkspaceWikiScanClearsStaleKnowledgeAfterRerunFailure(t *testing.T) {

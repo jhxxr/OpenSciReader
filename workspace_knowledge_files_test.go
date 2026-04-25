@@ -145,3 +145,63 @@ func TestWorkspaceKnowledgeFilesReadSourcesFallsBackToLegacyRawLayout(t *testing
 		t.Fatalf("sources[0].ID = %q, want %q", sources[0].ID, "source:paper-a")
 	}
 }
+
+func TestWorkspaceKnowledgeFilesReadStateFallsBackToLegacyAggregateLayout(t *testing.T) {
+	t.Parallel()
+
+	paths := newTestAppPaths(t)
+	files := newWorkspaceKnowledgeFiles(paths, "workspace-a")
+	if err := files.EnsureLayout(); err != nil {
+		t.Fatalf("EnsureLayout() error = %v", err)
+	}
+
+	workspaceRoot, err := files.workspaceRootDir()
+	if err != nil {
+		t.Fatalf("workspaceRootDir() error = %v", err)
+	}
+	legacySchemaDir := filepath.Join(workspaceRoot, "schema")
+	if err := writeWorkspaceKnowledgeJSON(filepath.Join(legacySchemaDir, "entities.json"), []WorkspaceKnowledgeEntity{{ID: "entity:attention", Title: "Attention"}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(entities) error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(filepath.Join(legacySchemaDir, "claims.json"), []WorkspaceKnowledgeClaim{{ID: "claim:attention", Title: "Attention claim"}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(claims) error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(filepath.Join(legacySchemaDir, "tasks.json"), []WorkspaceKnowledgeTask{{ID: "task:attention", Title: "Attention task"}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(tasks) error = %v", err)
+	}
+	if err := writeWorkspaceKnowledgeJSON(filepath.Join(legacySchemaDir, "relations.json"), []WorkspaceKnowledgeRelation{{ID: "relation:attention", Type: "supports"}}); err != nil {
+		t.Fatalf("writeWorkspaceKnowledgeJSON(relations) error = %v", err)
+	}
+
+	entities, err := readWorkspaceKnowledgeEntities(files)
+	if err != nil {
+		t.Fatalf("readWorkspaceKnowledgeEntities() error = %v", err)
+	}
+	if len(entities) != 1 || entities[0].ID != "entity:attention" {
+		t.Fatalf("entities = %#v, want legacy entity", entities)
+	}
+
+	claims, err := readWorkspaceKnowledgeClaims(files)
+	if err != nil {
+		t.Fatalf("readWorkspaceKnowledgeClaims() error = %v", err)
+	}
+	if len(claims) != 1 || claims[0].ID != "claim:attention" {
+		t.Fatalf("claims = %#v, want legacy claim", claims)
+	}
+
+	tasks, err := readWorkspaceKnowledgeTasks(files)
+	if err != nil {
+		t.Fatalf("readWorkspaceKnowledgeTasks() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "task:attention" {
+		t.Fatalf("tasks = %#v, want legacy task", tasks)
+	}
+
+	relations, err := readWorkspaceKnowledgeRelations(files)
+	if err != nil {
+		t.Fatalf("readWorkspaceKnowledgeRelations() error = %v", err)
+	}
+	if len(relations) != 1 || relations[0].ID != "relation:attention" {
+		t.Fatalf("relations = %#v, want legacy relation", relations)
+	}
+}
