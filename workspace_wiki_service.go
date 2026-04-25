@@ -289,6 +289,13 @@ func (r *workspaceWikiScanRunner) runScan(ctx context.Context, job WorkspaceWiki
 	if _, err := CompileWorkspaceKnowledge(files, workspace.Name); err != nil {
 		return err
 	}
+	pages, err := buildWorkspaceWikiPages(workspace, files, manifest)
+	if err != nil {
+		return err
+	}
+	if err := r.store.ReplaceWorkspaceWikiPages(ctx, workspace.ID, pages); err != nil {
+		return err
+	}
 
 	return files.WriteScanRun(WorkspaceKnowledgeScanRunRecord{
 		ID:          strings.TrimSpace(job.JobID),
@@ -913,4 +920,131 @@ func workspaceKnowledgeFileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func buildWorkspaceWikiPages(workspace Workspace, files workspaceKnowledgeFiles, sources []WorkspaceKnowledgeSource) ([]WorkspaceWikiPage, error) {
+	pages := make([]WorkspaceWikiPage, 0, len(sources)+1)
+
+	overviewPath, err := files.OverviewPath()
+	if err != nil {
+		return nil, err
+	}
+	if workspaceKnowledgeFileExists(overviewPath) {
+		pages = append(pages, newWorkspaceOverviewWikiPage(workspace, overviewPath))
+	}
+
+	for _, source := range sources {
+		if strings.TrimSpace(source.Slug) == "" {
+			continue
+		}
+		documentPath, err := files.DocumentWikiPath(source.Slug)
+		if err != nil {
+			return nil, err
+		}
+		if !workspaceKnowledgeFileExists(documentPath) {
+			continue
+		}
+		pages = append(pages, newWorkspaceDocumentWikiPage(workspace.ID, source, documentPath))
+	}
+
+	sort.Slice(pages, func(i, j int) bool {
+		if pages[i].Kind != pages[j].Kind {
+			return pages[i].Kind == WorkspaceWikiPageOverview
+		}
+		return pages[i].Slug < pages[j].Slug
+	})
+	return pages, nil
+}
+
+func newWorkspaceOverviewWikiPage(workspace Workspace, markdownPath string) WorkspaceWikiPage {
+	updatedAt := workspaceWikiPageTimestamp(markdownPath)
+	title := strings.TrimSpace(workspace.Name)
+	if title == "" {
+		title = "Workspace Overview"
+	}
+	return WorkspaceWikiPage{
+		ID:               "wiki_page:" + strings.TrimSpace(workspace.ID) + ":overview",
+		WorkspaceID:      strings.TrimSpace(workspace.ID),
+		SourceDocumentID: "",
+		Title:            title,
+		Slug:             "overview",
+		Kind:             WorkspaceWikiPageOverview,
+		MarkdownPath:     markdownPath,
+		Summary:          workspaceWikiPageSummary(markdownPath),
+		CreatedAt:        updatedAt,
+		UpdatedAt:        updatedAt,
+	}
+}
+
+func newWorkspaceDocumentWikiPage(workspaceID string, source WorkspaceKnowledgeSource, markdownPath string) WorkspaceWikiPage {
+	updatedAt := workspaceWikiPageTimestamp(markdownPath)
+	title := strings.TrimSpace(source.Title)
+	if title == "" {
+		title = strings.TrimSpace(source.Slug)
+	}
+	return WorkspaceWikiPage{
+		ID:               "wiki_page:" + strings.TrimSpace(workspaceID) + ":document:" + strings.TrimSpace(source.Slug),
+		WorkspaceID:      strings.TrimSpace(workspaceID),
+		SourceDocumentID: strings.TrimSpace(source.DocumentID),
+		Title:            title,
+		Slug:             strings.TrimSpace(source.Slug),
+		Kind:             WorkspaceWikiPageDocument,
+		MarkdownPath:     markdownPath,
+		Summary:          workspaceWikiPageSummary(markdownPath),
+		CreatedAt:        updatedAt,
+		UpdatedAt:        updatedAt,
+	}
+}
+
+func workspaceWikiPageTimestamp(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nowRFC3339()
+	}
+	return info.ModTime().UTC().Format("2006-01-02T15:04:05Z07:00")
+}
+
+func workspaceWikiPageSummary(path string) string {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return summarizeWorkspaceWikiMarkdown(string(content))
+}
+
+func summarizeWorkspaceWikiMarkdown(markdown string) string {
+	trimmed := strings.TrimSpace(markdown)
+	if trimmed == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n")
+	paragraph := make([]string, 0, 3)
+	inCodeBlock := false
+	for _, line := range lines {
+		text := strings.TrimSpace(line)
+		if strings.HasPrefix(text, "```") {
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+		if inCodeBlock || text == "" {
+			if len(paragraph) > 0 {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(text, "#") {
+			continue
+		}
+		if strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "* ") {
+			text = strings.TrimSpace(text[2:])
+		}
+		paragraph = append(paragraph, text)
+	}
+
+	summary := strings.Join(paragraph, " ")
+	if len(summary) <= 220 {
+		return summary
+	}
+	return strings.TrimSpace(summary[:217]) + "..."
 }
