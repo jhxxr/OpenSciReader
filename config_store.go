@@ -62,6 +62,14 @@ func openSQLite(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open sqlite database %s: %w", path, err)
 	}
 
+	// Keep each test database on a single SQLite connection.
+	// The workspace wiki tests poll job state while a background goroutine updates it.
+	// With multiple pooled connections, modernc sqlite can surface transient SQLITE_BUSY
+	// errors against the same file on Windows. Serializing access through one connection
+	// keeps the behavior stable without changing higher-level logic.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys for %s: %w", path, err)
@@ -154,6 +162,31 @@ func (s *configStore) bootstrap() error {
 			workspace_id TEXT PRIMARY KEY,
 			config_json TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS workspace_agent_sessions (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			surface TEXT NOT NULL DEFAULT 'workspace',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS workspace_agent_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			surface TEXT NOT NULL DEFAULT 'workspace',
+			role TEXT NOT NULL,
+			kind TEXT NOT NULL DEFAULT 'message',
+			prompt TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			skill_name TEXT NOT NULL DEFAULT '',
+			evidence_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES workspace_agent_sessions(id) ON DELETE CASCADE,
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS ai_chat_history (
@@ -878,6 +911,321 @@ func (s *configStore) GetWorkspace(ctx context.Context, workspaceID string) (Wor
 		return Workspace{}, fmt.Errorf("load workspace: %w", err)
 	}
 	return workspace, nil
+}
+
+func (s *configStore) CreateWorkspaceAgentSession(ctx context.Context, input WorkspaceAgentSessionCreateInput) (WorkspaceAgentSession, error) {
+	session, err := newWorkspaceAgentSessionRecord(ctx, func(ctx context.Context, workspaceID string) error {
+		_, err := s.GetWorkspace(ctx, workspaceID)
+		return err
+	}, input)
+	if err != nil {
+		return WorkspaceAgentSession{}, err
+	}
+	if _, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO workspace_agent_sessions (id, workspace_id, title, surface, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?);
+	`, session.ID, session.WorkspaceID, session.Title, session.Surface, session.Status, session.CreatedAt, session.UpdatedAt); err != nil {
+		return WorkspaceAgentSession{}, fmt.Errorf("create workspace agent session: %w", err)
+	}
+
+	return session, nil
+}
+
+func (s *configStore) AppendWorkspaceAgentMessage(ctx context.Context, input WorkspaceAgentMessageCreateInput) (WorkspaceAgentMessage, error) {
+	message, err := newWorkspaceAgentMessageRecord(ctx, s.getWorkspaceAgentSession, input)
+	if err != nil {
+		return WorkspaceAgentMessage{}, err
+	}
+
+	result, err := s.appDB.ExecContext(ctx, `
+		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, message.EvidenceCount, message.CreatedAt)
+	if err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("append workspace agent message: %w", err)
+	}
+	messageID, err := result.LastInsertId()
+	if err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("read workspace agent message id: %w", err)
+	}
+	message.ID = messageID
+	if _, err := s.appDB.ExecContext(ctx, `
+		UPDATE workspace_agent_sessions
+		SET updated_at = ?
+		WHERE id = ? AND workspace_id = ?;
+	`, message.CreatedAt, message.SessionID, message.WorkspaceID); err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("touch workspace agent session: %w", err)
+	}
+
+	return message, nil
+}
+
+func (s *configStore) CreateWorkspaceAgentSessionTx(ctx context.Context, tx *sql.Tx, input WorkspaceAgentSessionCreateInput) (WorkspaceAgentSession, error) {
+	session, err := newWorkspaceAgentSessionRecord(ctx, func(ctx context.Context, workspaceID string) error {
+		_, err := getWorkspaceRecordTx(ctx, tx, workspaceID)
+		return err
+	}, input)
+	if err != nil {
+		return WorkspaceAgentSession{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO workspace_agent_sessions (id, workspace_id, title, surface, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?);
+	`, session.ID, session.WorkspaceID, session.Title, session.Surface, session.Status, session.CreatedAt, session.UpdatedAt); err != nil {
+		return WorkspaceAgentSession{}, fmt.Errorf("create workspace agent session: %w", err)
+	}
+	return session, nil
+}
+
+func (s *configStore) AppendWorkspaceAgentMessageTx(ctx context.Context, tx *sql.Tx, input WorkspaceAgentMessageCreateInput) (WorkspaceAgentMessage, error) {
+	message, err := newWorkspaceAgentMessageRecord(ctx, func(ctx context.Context, workspaceID, sessionID string) (WorkspaceAgentSession, error) {
+		return getWorkspaceAgentSessionTx(ctx, tx, workspaceID, sessionID)
+	}, input)
+	if err != nil {
+		return WorkspaceAgentMessage{}, err
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, message.EvidenceCount, message.CreatedAt)
+	if err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("append workspace agent message: %w", err)
+	}
+	messageID, err := result.LastInsertId()
+	if err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("read workspace agent message id: %w", err)
+	}
+	message.ID = messageID
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE workspace_agent_sessions
+		SET updated_at = ?
+		WHERE id = ? AND workspace_id = ?;
+	`, message.CreatedAt, message.SessionID, message.WorkspaceID); err != nil {
+		return WorkspaceAgentMessage{}, fmt.Errorf("touch workspace agent session: %w", err)
+	}
+	return message, nil
+}
+
+func newWorkspaceAgentSessionRecord(ctx context.Context, ensureWorkspace func(context.Context, string) error, input WorkspaceAgentSessionCreateInput) (WorkspaceAgentSession, error) {
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	if workspaceID == "" {
+		return WorkspaceAgentSession{}, fmt.Errorf("workspace id is required")
+	}
+	if err := ensureWorkspace(ctx, workspaceID); err != nil {
+		return WorkspaceAgentSession{}, err
+	}
+
+	title := strings.TrimSpace(input.Title)
+	surface, err := normalizeWorkspaceAgentSurface(input.Surface)
+	if err != nil {
+		return WorkspaceAgentSession{}, err
+	}
+
+	timestamp := nowRFC3339()
+	session := WorkspaceAgentSession{
+		ID:          newEntityID("was"),
+		WorkspaceID: workspaceID,
+		Title:       title,
+		Surface:     surface,
+		Status:      "active",
+		CreatedAt:   timestamp,
+		UpdatedAt:   timestamp,
+	}
+	return session, nil
+}
+
+func getWorkspaceRecordTx(ctx context.Context, tx *sql.Tx, workspaceID string) (Workspace, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, name, description, color, created_at, updated_at
+		FROM workspaces
+		WHERE id = ?;
+	`, strings.TrimSpace(workspaceID))
+
+	var workspace Workspace
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Description, &workspace.Color, &workspace.CreatedAt, &workspace.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Workspace{}, fmt.Errorf("workspace %s not found", strings.TrimSpace(workspaceID))
+		}
+		return Workspace{}, fmt.Errorf("load workspace: %w", err)
+	}
+	return workspace, nil
+}
+
+func newWorkspaceAgentMessageRecord(ctx context.Context, getSession func(context.Context, string, string) (WorkspaceAgentSession, error), input WorkspaceAgentMessageCreateInput) (WorkspaceAgentMessage, error) {
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return WorkspaceAgentMessage{}, fmt.Errorf("session id is required")
+	}
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	if workspaceID == "" {
+		return WorkspaceAgentMessage{}, fmt.Errorf("workspace id is required")
+	}
+	session, err := getSession(ctx, workspaceID, sessionID)
+	if err != nil {
+		return WorkspaceAgentMessage{}, err
+	}
+	rawSurface := strings.TrimSpace(input.Surface)
+	surface := session.Surface
+	if rawSurface != "" {
+		surface, err = normalizeWorkspaceAgentSurface(rawSurface)
+		if err != nil {
+			return WorkspaceAgentMessage{}, err
+		}
+	}
+	if surface == "" {
+		surface = session.Surface
+	}
+	if surface == "" {
+		surface = string(WorkspaceAgentSurfaceWorkspace)
+	}
+	role := strings.TrimSpace(input.Role)
+	if !isValidWorkspaceAgentMessageRole(role) {
+		return WorkspaceAgentMessage{}, fmt.Errorf("invalid workspace agent role: %s", role)
+	}
+	kind := strings.TrimSpace(input.Kind)
+	if kind == "" {
+		kind = "message"
+	}
+	content := strings.TrimSpace(input.Content)
+
+	message := WorkspaceAgentMessage{
+		SessionID:     sessionID,
+		WorkspaceID:   workspaceID,
+		Surface:       surface,
+		Role:          role,
+		Kind:          kind,
+		Prompt:        strings.TrimSpace(input.Prompt),
+		Content:       content,
+		SkillName:     strings.TrimSpace(input.SkillName),
+		EvidenceCount: input.EvidenceCount,
+		CreatedAt:     nowRFC3339(),
+	}
+	return message, nil
+}
+
+func getWorkspaceAgentSessionTx(ctx context.Context, tx *sql.Tx, workspaceID, sessionID string) (WorkspaceAgentSession, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, workspace_id, title, surface, status, created_at, updated_at
+		FROM workspace_agent_sessions
+		WHERE id = ? AND workspace_id = ?;
+	`, strings.TrimSpace(sessionID), strings.TrimSpace(workspaceID))
+
+	var session WorkspaceAgentSession
+	if err := row.Scan(&session.ID, &session.WorkspaceID, &session.Title, &session.Surface, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return WorkspaceAgentSession{}, fmt.Errorf("workspace agent session %s not found in workspace %s", strings.TrimSpace(sessionID), strings.TrimSpace(workspaceID))
+		}
+		return WorkspaceAgentSession{}, fmt.Errorf("load workspace agent session: %w", err)
+	}
+	return session, nil
+}
+
+func (s *configStore) ListWorkspaceAgentSessions(ctx context.Context, workspaceID string) ([]WorkspaceAgentSession, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT s.id, s.workspace_id, s.title, s.surface, s.status, s.created_at, s.updated_at, COALESCE(MAX(m.id), 0) AS last_message_order, s.rowid
+		FROM workspace_agent_sessions s
+		LEFT JOIN workspace_agent_messages m ON m.session_id = s.id
+		WHERE s.workspace_id = ?
+		GROUP BY s.id, s.workspace_id, s.title, s.surface, s.status, s.created_at, s.updated_at, s.rowid
+		ORDER BY last_message_order DESC, s.updated_at DESC, s.created_at DESC, s.rowid DESC;
+	`, strings.TrimSpace(workspaceID))
+	if err != nil {
+		return nil, fmt.Errorf("list workspace agent sessions: %w", err)
+	}
+	defer rows.Close()
+
+	sessions := []WorkspaceAgentSession{}
+	for rows.Next() {
+		var session WorkspaceAgentSession
+		var (
+			lastMessageOrder int64
+			sessionRowID     int64
+		)
+		if err := rows.Scan(&session.ID, &session.WorkspaceID, &session.Title, &session.Surface, &session.Status, &session.CreatedAt, &session.UpdatedAt, &lastMessageOrder, &sessionRowID); err != nil {
+			return nil, fmt.Errorf("scan workspace agent session: %w", err)
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace agent sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+func (s *configStore) ListWorkspaceAgentMessages(ctx context.Context, sessionID string) ([]WorkspaceAgentMessage, error) {
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at
+		FROM workspace_agent_messages
+		WHERE session_id = ?
+		ORDER BY id ASC;
+	`, strings.TrimSpace(sessionID))
+	if err != nil {
+		return nil, fmt.Errorf("list workspace agent messages: %w", err)
+	}
+	defer rows.Close()
+
+	messages := []WorkspaceAgentMessage{}
+	for rows.Next() {
+		var message WorkspaceAgentMessage
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &message.EvidenceCount, &message.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan workspace agent message: %w", err)
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace agent messages: %w", err)
+	}
+	return messages, nil
+}
+
+func (s *configStore) ListWorkspaceAgentMessagesForWorkspace(ctx context.Context, workspaceID, sessionID string) ([]WorkspaceAgentMessage, error) {
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if _, err := s.getWorkspaceAgentSession(ctx, trimmedWorkspaceID, trimmedSessionID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.appDB.QueryContext(ctx, `
+		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at
+		FROM workspace_agent_messages
+		WHERE session_id = ? AND workspace_id = ?
+		ORDER BY id ASC;
+	`, trimmedSessionID, trimmedWorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace agent messages: %w", err)
+	}
+	defer rows.Close()
+
+	messages := []WorkspaceAgentMessage{}
+	for rows.Next() {
+		var message WorkspaceAgentMessage
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &message.EvidenceCount, &message.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan workspace agent message: %w", err)
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace agent messages: %w", err)
+	}
+	return messages, nil
+}
+
+func (s *configStore) getWorkspaceAgentSession(ctx context.Context, workspaceID, sessionID string) (WorkspaceAgentSession, error) {
+	row := s.appDB.QueryRowContext(ctx, `
+		SELECT id, workspace_id, title, surface, status, created_at, updated_at
+		FROM workspace_agent_sessions
+		WHERE id = ? AND workspace_id = ?;
+	`, strings.TrimSpace(sessionID), strings.TrimSpace(workspaceID))
+
+	var session WorkspaceAgentSession
+	if err := row.Scan(&session.ID, &session.WorkspaceID, &session.Title, &session.Surface, &session.Status, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return WorkspaceAgentSession{}, fmt.Errorf("workspace agent session %s not found in workspace %s", strings.TrimSpace(sessionID), strings.TrimSpace(workspaceID))
+		}
+		return WorkspaceAgentSession{}, fmt.Errorf("load workspace agent session: %w", err)
+	}
+	return session, nil
 }
 
 func (s *configStore) ListDocumentsByWorkspace(ctx context.Context, workspaceID string) ([]DocumentRecord, error) {

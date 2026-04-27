@@ -231,6 +231,83 @@ type WorkspaceKnowledgePromotionInput struct {
 	Candidates  []WorkspaceKnowledgeCandidate `json:"candidates"`
 }
 
+type WorkspaceAgentSurface string
+
+const (
+	WorkspaceAgentSurfaceWorkspace WorkspaceAgentSurface = "workspace"
+	WorkspaceAgentSurfaceReader    WorkspaceAgentSurface = "reader"
+)
+
+type WorkspaceAgentMessageRole string
+
+const (
+	WorkspaceAgentMessageRoleUser      WorkspaceAgentMessageRole = "user"
+	WorkspaceAgentMessageRoleAssistant WorkspaceAgentMessageRole = "assistant"
+)
+
+type WorkspaceAgentSession struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	Title       string `json:"title"`
+	Surface     string `json:"surface"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type WorkspaceAgentMessage struct {
+	ID            int64  `json:"id"`
+	SessionID     string `json:"sessionId"`
+	WorkspaceID   string `json:"workspaceId"`
+	Surface       string `json:"surface"`
+	Role          string `json:"role"`
+	Kind          string `json:"kind"`
+	Prompt        string `json:"prompt"`
+	Content       string `json:"content"`
+	SkillName     string `json:"skillName"`
+	EvidenceCount int    `json:"evidenceCount"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+type WorkspaceAgentSessionCreateInput struct {
+	WorkspaceID string `json:"workspaceId"`
+	Title       string `json:"title"`
+	Surface     string `json:"surface"`
+}
+
+type WorkspaceAgentMessageCreateInput struct {
+	SessionID     string `json:"sessionId"`
+	WorkspaceID   string `json:"workspaceId"`
+	Surface       string `json:"surface"`
+	Role          string `json:"role"`
+	Kind          string `json:"kind"`
+	Prompt        string `json:"prompt"`
+	Content       string `json:"content"`
+	SkillName     string `json:"skillName"`
+	EvidenceCount int    `json:"evidenceCount"`
+}
+
+type WorkspaceAgentAskInput struct {
+	WorkspaceID             string `json:"workspaceId"`
+	DocumentID              string `json:"documentId"`
+	SessionID               string `json:"sessionId"`
+	Surface                 string `json:"surface"`
+	IncludeDocumentContext  bool   `json:"includeDocumentContext"`
+	IncludeWorkspaceContext bool   `json:"includeWorkspaceContext"`
+	Selection               string `json:"selection"`
+	CurrentPage             int    `json:"currentPage"`
+	ProviderID              int64  `json:"providerId"`
+	ModelID                 int64  `json:"modelId"`
+	Question                string `json:"question"`
+}
+
+type WorkspaceAgentAskResult struct {
+	Session          WorkspaceAgentSession         `json:"session"`
+	UserMessage      WorkspaceAgentMessage         `json:"userMessage"`
+	AssistantMessage WorkspaceAgentMessage         `json:"assistantMessage"`
+	Query            WorkspaceKnowledgeQueryResult `json:"query"`
+}
+
 type DiscoveredModel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`

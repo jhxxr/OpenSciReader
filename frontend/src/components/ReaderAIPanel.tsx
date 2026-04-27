@@ -11,6 +11,7 @@ import {
 import { EventsOff, EventsOn } from "../../wailsjs/runtime/runtime";
 import { configApi } from "../api/config";
 import { gatewayApi } from "../api/gateway";
+import { workspaceAgentApi } from "../api/workspaceAgent";
 import { workspaceKnowledgeApi } from "../api/workspaceKnowledge";
 import { historyApi } from "../api/history";
 import {
@@ -61,6 +62,8 @@ interface ConversationPair {
 
 interface ReaderAIPanelProps {
   tab: TabItem;
+  initialSessionId: string | null;
+  onSessionChange: (sessionId: string | null) => void;
   llmConfigs: ProviderConfig[];
   drawingConfigs: ProviderConfig[];
   activeLLMConfig: ProviderConfig | null;
@@ -105,6 +108,47 @@ interface CopilotState {
   expandedCandidates: Set<string>;
   promotingIds: Set<string>;
   promoteError: string | null;
+}
+
+interface ReaderAskScope {
+  selection: boolean;
+  page: boolean;
+  document: boolean;
+  workspace: boolean;
+}
+
+interface ReaderAskInputParams<TDocumentId extends string> {
+  workspaceId: string;
+  sessionId: string | null;
+  documentId: TDocumentId;
+  selection: string;
+  activePage: number;
+  llmProviderId: number;
+  llmModelId: number;
+  question: string;
+  scope: ReaderAskScope;
+}
+
+type ReaderAskPayload<TDocumentId extends string = string> = {
+  documentId: TDocumentId;
+} & import('../types/workspaceAgent').WorkspaceAgentAskInput;
+
+function buildReaderAskInput<TDocumentId extends string>(
+  params: ReaderAskInputParams<TDocumentId>,
+): ReaderAskPayload<TDocumentId> {
+  return {
+    workspaceId: params.workspaceId,
+    sessionId: params.sessionId ?? undefined,
+    surface: 'reader',
+    documentId: params.documentId,
+    includeDocumentContext: params.scope.document,
+    includeWorkspaceContext: params.scope.workspace,
+    selection: params.scope.selection ? params.selection : undefined,
+    currentPage: params.scope.page ? params.activePage : undefined,
+    providerId: params.llmProviderId,
+    modelId: params.llmModelId,
+    question: params.question,
+  };
 }
 
 function getErrorMessage(error: unknown, context: string): string {
@@ -199,6 +243,8 @@ const MULTI_ROUND_FINAL_PROMPT = `下面是按顺序得到的论文分块纪要�
 
 export function ReaderAIPanel({
   tab,
+  initialSessionId,
+  onSessionChange,
   llmConfigs,
   drawingConfigs,
   activeLLMConfig,
@@ -217,6 +263,7 @@ export function ReaderAIPanel({
   const [workspaceConfig, setWorkspaceConfig] = useState<AIWorkspaceConfig>(
     DEFAULT_AI_WORKSPACE_CONFIG,
   );
+  const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [results, setResults] = useState<AIResult[]>([]);
@@ -277,6 +324,10 @@ export function ReaderAIPanel({
   const workspaceID = tab.workspaceId ?? "";
   const workspaceId = useMemo(() => tab.workspaceId || '', [tab.workspaceId]);
   const documentId = useMemo(() => tab.documentId || '', [tab.documentId]);
+
+  useEffect(() => {
+    setSessionId(initialSessionId);
+  }, [initialSessionId, tab.id]);
 
   const shouldShowCopilot = useMemo(() => {
     return workspaceId && activeLLMModel;
@@ -434,25 +485,29 @@ export function ReaderAIPanel({
   );
 
   async function handleAsk() {
-    if (!workspaceId || !activeLLMModel || copilotState.isAsking) {
+    if (!workspaceId || !activeLLMModel || !llmProviderId || !llmModelId || copilotState.isAsking) {
       return;
     }
 
     setCopilotState(prev => ({ ...prev, isAsking: true, answerError: null }));
 
     try {
-      const result = await workspaceKnowledgeApi.queryWorkspaceKnowledge(
+      const result = await workspaceAgentApi.ask(buildReaderAskInput({
         workspaceId,
+        sessionId,
+        documentId,
+        selection: selection.cleaned,
+        activePage,
         llmProviderId,
         llmModelId,
-        copilotState.question,
-        {
-          selection: copilotState.scope.selection ? selection.cleaned : undefined,
-          currentPage: copilotState.scope.page ? activePage : undefined,
-          documentId: copilotState.scope.document ? documentId : undefined,
-          workspaceContext: copilotState.scope.workspace,
-        }
-      );
+        question: copilotState.question,
+        scope: {
+          selection: copilotState.scope.selection,
+          page: copilotState.scope.page,
+          document: copilotState.scope.document,
+          workspace: copilotState.scope.workspace,
+        },
+      }));
 
       if (!result) {
         setCopilotState(prev => ({
@@ -464,20 +519,32 @@ export function ReaderAIPanel({
         return;
       }
 
+      const nextSessionId = result.session.id || null;
+      setSessionId(nextSessionId);
+      onSessionChange(nextSessionId);
+
       // Group evidence by kind
-      const evidence = {
-        entities: result.evidence.filter(e => e.kind === 'entity'),
-        claims: result.evidence.filter(e => e.kind === 'claim'),
-        tasks: result.evidence.filter(e => e.kind === 'task'),
-        sources: result.evidence.filter(e => e.kind === 'wiki_page' || e.kind === 'raw_excerpt'),
+      const evidence: CopilotState['evidence'] = {
+        entities: result.query.evidence.filter(
+          (e): e is WorkspaceKnowledgeEvidenceHit => e.kind === 'entity',
+        ),
+        claims: result.query.evidence.filter(
+          (e): e is WorkspaceKnowledgeEvidenceHit => e.kind === 'claim',
+        ),
+        tasks: result.query.evidence.filter(
+          (e): e is WorkspaceKnowledgeEvidenceHit => e.kind === 'task',
+        ),
+        sources: result.query.evidence.filter(
+          (e): e is WorkspaceKnowledgeEvidenceHit => e.kind === 'wiki_page' || e.kind === 'raw_excerpt',
+        ),
       };
 
       setCopilotState(prev => ({
         ...prev,
         isAsking: false,
-        answer: result.answer,
+        answer: result.query.answer,
         evidence,
-        candidates: result.candidates,
+        candidates: result.query.candidates,
       }));
     } catch (error) {
       setCopilotState(prev => ({

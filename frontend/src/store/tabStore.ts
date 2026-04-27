@@ -7,6 +7,7 @@ export interface TabItem {
   type?: 'document' | 'workspace';
   workspaceId?: string;
   documentId?: string;
+  agentSessionId?: string;
   sourceKind?: 'workspace_document' | 'zotero_item';
   itemType?: string;
   citeKey?: string;
@@ -19,6 +20,7 @@ interface TabState {
   openTab: (item: TabItem) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
+  setTabAgentSessionId: (id: string, sessionId: string | null) => void;
 }
 
 function getTabKey(item: TabItem): string {
@@ -35,9 +37,19 @@ export const useTabStore = create<TabState>((set) => ({
   openTab: (item) =>
     set((state) => {
       const key = getTabKey(item);
-      const exists = state.tabs.find((tab) => getTabKey(tab) === key);
-      if (exists) {
-        return { activeTabId: exists.id };
+      const existingIndex = state.tabs.findIndex((tab) => getTabKey(tab) === key);
+      if (existingIndex >= 0) {
+        const existing = state.tabs[existingIndex];
+        const tabs = [...state.tabs];
+        tabs[existingIndex] = {
+          ...existing,
+          ...item,
+          id: existing.id,
+        };
+        return {
+          tabs,
+          activeTabId: existing.id,
+        };
       }
       return {
         tabs: [...state.tabs, item],
@@ -65,4 +77,16 @@ export const useTabStore = create<TabState>((set) => ({
     }),
 
   setActiveTab: (id) => set({ activeTabId: id }),
+
+  setTabAgentSessionId: (id, sessionId) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id
+          ? {
+              ...tab,
+              agentSessionId: sessionId ?? undefined,
+            }
+          : tab,
+      ),
+    })),
 }));

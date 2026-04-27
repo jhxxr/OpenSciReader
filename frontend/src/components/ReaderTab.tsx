@@ -41,7 +41,7 @@ import { DualPdfReader } from "./DualPdfReader";
 import { ReaderAIPanel } from "./ReaderAIPanel";
 import { extractFigureCandidates } from "../lib/pdfFigures";
 import { useReaderStore } from "../store/readerStore";
-import type { TabItem } from "../store/tabStore";
+import { useTabStore, type TabItem } from "../store/tabStore";
 import type { ReaderOutlineItem } from "../types/pdf";
 import type { ReaderNoteEntry } from "../types/notes";
 import type { PDFTranslateRuntimeConfig } from "../types/config";
@@ -71,6 +71,7 @@ export function ReaderTab({
   const figureCaptures = useReaderStore((state) => state.figureCaptures);
   const addFigureCaptures = useReaderStore((state) => state.addFigureCaptures);
   const setSnapshot = useReaderStore((state) => state.setSnapshot);
+  const setTabAgentSessionId = useTabStore((state) => state.setTabAgentSessionId);
 
   const [outline, setOutline] = useState<ReaderOutlineItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(() => readReaderUIState().sidebarOpen);
@@ -1301,6 +1302,8 @@ export function ReaderTab({
           <Tabs.Content className="tabs-content" value="assistant" forceMount>
             <ReaderAIPanel
               tab={tab}
+              initialSessionId={tab.agentSessionId ?? null}
+              onSessionChange={(sessionId) => setTabAgentSessionId(tab.id, sessionId)}
               llmConfigs={groupedProviders.llm}
               drawingConfigs={groupedProviders.drawing}
               activeLLMConfig={activeLLMConfig}

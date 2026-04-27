@@ -19,6 +19,8 @@ type App struct {
 	gateway    *gatewayService
 	pdf        *pdfService
 	translator *translator.Manager
+	query      *workspaceKnowledgeQueryService
+	agent      *workspaceAgentService
 	wiki       *workspaceWikiService
 }
 
@@ -48,6 +50,8 @@ func (a *App) startup(ctx context.Context) {
 	a.gateway = newGatewayService(store)
 	a.pdf = newPDFService(store)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
+	a.query = newWorkspaceKnowledgeQueryService(paths, a.gateway)
+	a.agent = newWorkspaceAgentService(store, a.query)
 	a.wiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
 }
 
@@ -174,6 +178,29 @@ func (a *App) ListDocuments(workspaceID string) ([]DocumentRecord, error) {
 
 func (a *App) DeleteDocument(workspaceID, documentID string) error {
 	return a.store.DeleteDocument(a.ctx, a.paths, workspaceID, documentID)
+}
+
+func (a *App) ListWorkspaceAgentSessions(workspaceID string) ([]WorkspaceAgentSession, error) {
+	return a.store.ListWorkspaceAgentSessions(a.ctx, workspaceID)
+}
+
+func (a *App) CreateWorkspaceAgentSession(input WorkspaceAgentSessionCreateInput) (WorkspaceAgentSession, error) {
+	return a.store.CreateWorkspaceAgentSession(a.ctx, input)
+}
+
+func (a *App) ListWorkspaceAgentMessages(sessionID string) ([]WorkspaceAgentMessage, error) {
+	return a.store.ListWorkspaceAgentMessages(a.ctx, sessionID)
+}
+
+func (a *App) ListWorkspaceAgentMessagesForWorkspace(workspaceID, sessionID string) ([]WorkspaceAgentMessage, error) {
+	return a.store.ListWorkspaceAgentMessagesForWorkspace(a.ctx, workspaceID, sessionID)
+}
+
+func (a *App) AskWorkspaceAgent(input WorkspaceAgentAskInput) (WorkspaceAgentAskResult, error) {
+	if a.agent == nil {
+		return WorkspaceAgentAskResult{}, fmt.Errorf("workspace agent service is unavailable")
+	}
+	return a.agent.Ask(a.ctx, input)
 }
 
 func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {

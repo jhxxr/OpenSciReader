@@ -700,6 +700,290 @@ export namespace main {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	
+	export class WorkspaceAgentAskInput {
+	    workspaceId: string;
+	    documentId: string;
+	    sessionId: string;
+	    surface: string;
+	    selection: string;
+	    currentPage: number;
+	    providerId: number;
+	    modelId: number;
+	    question: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentAskInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspaceId = source["workspaceId"];
+	        this.documentId = source["documentId"];
+	        this.sessionId = source["sessionId"];
+	        this.surface = source["surface"];
+	        this.selection = source["selection"];
+	        this.currentPage = source["currentPage"];
+	        this.providerId = source["providerId"];
+	        this.modelId = source["modelId"];
+	        this.question = source["question"];
+	    }
+	}
+	export class WorkspaceKnowledgeCandidate {
+	    id: string;
+	    title: string;
+	    type: string;
+	    summary: string;
+	    aliases: string[];
+	    entityIds: string[];
+	    priority: string;
+	    sourceId: string;
+	    pageStart: number;
+	    pageEnd: number;
+	    excerpt: string;
+	    sourceRefs: WorkspaceKnowledgeSourceRef[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.type = source["type"];
+	        this.summary = source["summary"];
+	        this.aliases = source["aliases"];
+	        this.entityIds = source["entityIds"];
+	        this.priority = source["priority"];
+	        this.sourceId = source["sourceId"];
+	        this.pageStart = source["pageStart"];
+	        this.pageEnd = source["pageEnd"];
+	        this.excerpt = source["excerpt"];
+	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WorkspaceKnowledgeSourceRef {
+	    sourceId: string;
+	    pageStart: number;
+	    pageEnd: number;
+	    excerpt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeSourceRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceId = source["sourceId"];
+	        this.pageStart = source["pageStart"];
+	        this.pageEnd = source["pageEnd"];
+	        this.excerpt = source["excerpt"];
+	    }
+	}
+	export class WorkspaceKnowledgeEvidenceHit {
+	    kind: string;
+	    id: string;
+	    title: string;
+	    summary: string;
+	    excerpt: string;
+	    sourceRefs: WorkspaceKnowledgeSourceRef[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeEvidenceHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.summary = source["summary"];
+	        this.excerpt = source["excerpt"];
+	        this.sourceRefs = this.convertValues(source["sourceRefs"], WorkspaceKnowledgeSourceRef);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WorkspaceKnowledgeQueryResult {
+	    answer: string;
+	    evidence: WorkspaceKnowledgeEvidenceHit[];
+	    candidates: WorkspaceKnowledgeCandidate[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceKnowledgeQueryResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.answer = source["answer"];
+	        this.evidence = this.convertValues(source["evidence"], WorkspaceKnowledgeEvidenceHit);
+	        this.candidates = this.convertValues(source["candidates"], WorkspaceKnowledgeCandidate);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WorkspaceAgentMessage {
+	    id: number;
+	    sessionId: string;
+	    workspaceId: string;
+	    surface: string;
+	    role: string;
+	    kind: string;
+	    prompt: string;
+	    content: string;
+	    skillName: string;
+	    evidenceCount: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.workspaceId = source["workspaceId"];
+	        this.surface = source["surface"];
+	        this.role = source["role"];
+	        this.kind = source["kind"];
+	        this.prompt = source["prompt"];
+	        this.content = source["content"];
+	        this.skillName = source["skillName"];
+	        this.evidenceCount = source["evidenceCount"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class WorkspaceAgentSession {
+	    id: string;
+	    workspaceId: string;
+	    title: string;
+	    surface: string;
+	    status: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workspaceId = source["workspaceId"];
+	        this.title = source["title"];
+	        this.surface = source["surface"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class WorkspaceAgentAskResult {
+	    session: WorkspaceAgentSession;
+	    userMessage: WorkspaceAgentMessage;
+	    assistantMessage: WorkspaceAgentMessage;
+	    query: WorkspaceKnowledgeQueryResult;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentAskResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session = this.convertValues(source["session"], WorkspaceAgentSession);
+	        this.userMessage = this.convertValues(source["userMessage"], WorkspaceAgentMessage);
+	        this.assistantMessage = this.convertValues(source["assistantMessage"], WorkspaceAgentMessage);
+	        this.query = this.convertValues(source["query"], WorkspaceKnowledgeQueryResult);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class WorkspaceAgentSessionCreateInput {
+	    workspaceId: string;
+	    title: string;
+	    surface: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentSessionCreateInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspaceId = source["workspaceId"];
+	        this.title = source["title"];
+	        this.surface = source["surface"];
+	    }
+	}
+	
 	export class WorkspaceKnowledgeCompileSummary {
 	    workspaceId: string;
 	    startedAt: string;
@@ -709,11 +993,11 @@ export namespace main {
 	    updatedWikiPaths: string[];
 	    compileDirty: boolean;
 	    wikiDirty: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceKnowledgeCompileSummary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.workspaceId = source["workspaceId"];
@@ -726,6 +1010,8 @@ export namespace main {
 	        this.wikiDirty = source["wikiDirty"];
 	    }
 	}
+	
+	
 	export class WorkspaceKnowledgeSource {
 	    sourceId: string;
 	    workspaceId: string;
@@ -743,11 +1029,11 @@ export namespace main {
 	    contentHash: string;
 	    extractPath?: string;
 	    documentId: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceKnowledgeSource(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourceId = source["sourceId"];

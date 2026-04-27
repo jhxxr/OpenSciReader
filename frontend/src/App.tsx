@@ -22,6 +22,7 @@ import {
   type ProviderTemplate,
 } from './lib/aiCatalog';
 import { useConfigStore, useProviderConfigs } from './store/configStore';
+import { useWorkspaceAgentStore } from './store/workspaceAgentStore';
 import { useTabStore } from './store/tabStore';
 import { useWorkspaceStore } from './store/workspaceStore';
 import { useZoteroStore } from './store/zoteroStore';
@@ -158,6 +159,7 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
   sources: WorkspaceKnowledgeSource[];
   compileSummary: WorkspaceKnowledgeCompileSummary | null;
 }>>({});
+  const [workspaceTabModes, setWorkspaceTabModes] = useState<Record<string, 'sessions' | 'knowledge'>>({});
 
   useEffect(() => {
     void loadConfig();
@@ -383,6 +385,9 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
 
   const handleOpenPdfTab = useCallback(
     (item: { id: string; title: string; pdfPath: string | null; workspaceId?: string; documentId?: string; sourceKind?: 'workspace_document' | 'zotero_item'; itemType?: string; citeKey?: string }) => {
+      const activeSessionId = item.workspaceId
+        ? useWorkspaceAgentStore.getState().panes[item.workspaceId]?.activeSessionId ?? undefined
+        : undefined;
       openTab({
         id: item.id,
         title: item.title,
@@ -390,6 +395,7 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
         type: 'document',
         workspaceId: item.workspaceId,
         documentId: item.documentId,
+        agentSessionId: activeSessionId,
         sourceKind: item.sourceKind,
         itemType: item.itemType,
         citeKey: item.citeKey,
@@ -407,6 +413,7 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
       await Promise.all([
         ensureWorkspaceTabDocuments(item.id),
         ensureWorkspaceTabWiki(item.id),
+        useWorkspaceAgentStore.getState().ensureWorkspace(item.id),
       ]);
       openTab({
         id: `workspace:${item.id}`,
@@ -724,6 +731,16 @@ const [workspaceTabWiki, setWorkspaceTabWiki] = useState<Record<string, {
               tab.type === 'workspace' ? (
                 <WorkspaceTab
                   key={tab.id}
+                  mode={tab.workspaceId ? workspaceTabModes[tab.workspaceId] ?? 'sessions' : 'sessions'}
+                  onChangeMode={(mode) => {
+                    if (!tab.workspaceId) {
+                      return;
+                    }
+                    setWorkspaceTabModes((current) => ({
+                      ...current,
+                      [tab.workspaceId!]: mode,
+                    }));
+                  }}
                   workspace={workspace.workspaces.find((item) => item.id === tab.workspaceId) ?? null}
                   documents={tab.workspaceId ? workspaceTabDocuments[tab.workspaceId]?.documents ?? [] : []}
                   isImporting={workspace.isImporting && tab.workspaceId === workspace.activeWorkspaceId}
