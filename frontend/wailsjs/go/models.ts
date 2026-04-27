@@ -706,6 +706,9 @@ export namespace main {
 	    documentId: string;
 	    sessionId: string;
 	    surface: string;
+	    skillName: string;
+	    includeDocumentContext: boolean;
+	    includeWorkspaceContext: boolean;
 	    selection: string;
 	    currentPage: number;
 	    providerId: number;
@@ -722,6 +725,9 @@ export namespace main {
 	        this.documentId = source["documentId"];
 	        this.sessionId = source["sessionId"];
 	        this.surface = source["surface"];
+	        this.skillName = source["skillName"];
+	        this.includeDocumentContext = source["includeDocumentContext"];
+	        this.includeWorkspaceContext = source["includeWorkspaceContext"];
 	        this.selection = source["selection"];
 	        this.currentPage = source["currentPage"];
 	        this.providerId = source["providerId"];
@@ -873,6 +879,26 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class WorkspaceAgentExecutedSkill {
+	    name: string;
+	    label: string;
+	    routedBy: string;
+	    reason: string;
+	    displayText: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentExecutedSkill(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.label = source["label"];
+	        this.routedBy = source["routedBy"];
+	        this.reason = source["reason"];
+	        this.displayText = source["displayText"];
+	    }
+	}
 	export class WorkspaceAgentMessage {
 	    id: number;
 	    sessionId: string;
@@ -883,6 +909,7 @@ export namespace main {
 	    prompt: string;
 	    content: string;
 	    skillName: string;
+	    executedSkill?: WorkspaceAgentExecutedSkill;
 	    evidenceCount: number;
 	    createdAt: string;
 	
@@ -901,9 +928,28 @@ export namespace main {
 	        this.prompt = source["prompt"];
 	        this.content = source["content"];
 	        this.skillName = source["skillName"];
+	        this.executedSkill = this.convertValues(source["executedSkill"], WorkspaceAgentExecutedSkill);
 	        this.evidenceCount = source["evidenceCount"];
 	        this.createdAt = source["createdAt"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class WorkspaceAgentSession {
 	    id: string;
@@ -933,6 +979,7 @@ export namespace main {
 	    session: WorkspaceAgentSession;
 	    userMessage: WorkspaceAgentMessage;
 	    assistantMessage: WorkspaceAgentMessage;
+	    executedSkill: WorkspaceAgentExecutedSkill;
 	    query: WorkspaceKnowledgeQueryResult;
 	
 	    static createFrom(source: any = {}) {
@@ -944,6 +991,7 @@ export namespace main {
 	        this.session = this.convertValues(source["session"], WorkspaceAgentSession);
 	        this.userMessage = this.convertValues(source["userMessage"], WorkspaceAgentMessage);
 	        this.assistantMessage = this.convertValues(source["assistantMessage"], WorkspaceAgentMessage);
+	        this.executedSkill = this.convertValues(source["executedSkill"], WorkspaceAgentExecutedSkill);
 	        this.query = this.convertValues(source["query"], WorkspaceKnowledgeQueryResult);
 	    }
 	
@@ -967,6 +1015,7 @@ export namespace main {
 	}
 	
 	
+	
 	export class WorkspaceAgentSessionCreateInput {
 	    workspaceId: string;
 	    title: string;
@@ -981,6 +1030,30 @@ export namespace main {
 	        this.workspaceId = source["workspaceId"];
 	        this.title = source["title"];
 	        this.surface = source["surface"];
+	    }
+	}
+	export class WorkspaceAgentSkillDefinition {
+	    name: string;
+	    label: string;
+	    description: string;
+	    manualEnabled: boolean;
+	    autoEnabled: boolean;
+	    readerEnabled: boolean;
+	    workspaceOnly: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceAgentSkillDefinition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.label = source["label"];
+	        this.description = source["description"];
+	        this.manualEnabled = source["manualEnabled"];
+	        this.autoEnabled = source["autoEnabled"];
+	        this.readerEnabled = source["readerEnabled"];
+	        this.workspaceOnly = source["workspaceOnly"];
 	    }
 	}
 	
@@ -1396,4 +1469,3 @@ export namespace translator {
 	}
 
 }
-

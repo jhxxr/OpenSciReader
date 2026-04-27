@@ -184,6 +184,7 @@ func (s *configStore) bootstrap() error {
 			prompt TEXT NOT NULL DEFAULT '',
 			content TEXT NOT NULL,
 			skill_name TEXT NOT NULL DEFAULT '',
+			executed_skill TEXT NOT NULL DEFAULT '',
 			evidence_count INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(session_id) REFERENCES workspace_agent_sessions(id) ON DELETE CASCADE,
@@ -270,6 +271,9 @@ func (s *configStore) bootstrap() error {
 		return err
 	}
 	if err := s.ensureHistoryDocumentColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureWorkspaceAgentExecutedSkillColumn(); err != nil {
 		return err
 	}
 	if err := s.migrateLegacyEncryptedProviderSecrets(); err != nil {
@@ -936,11 +940,15 @@ func (s *configStore) AppendWorkspaceAgentMessage(ctx context.Context, input Wor
 	if err != nil {
 		return WorkspaceAgentMessage{}, err
 	}
+	executedSkillJSON, err := marshalWorkspaceAgentExecutedSkill(message.ExecutedSkill)
+	if err != nil {
+		return WorkspaceAgentMessage{}, err
+	}
 
 	result, err := s.appDB.ExecContext(ctx, `
-		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, message.EvidenceCount, message.CreatedAt)
+		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, executed_skill, evidence_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, executedSkillJSON, message.EvidenceCount, message.CreatedAt)
 	if err != nil {
 		return WorkspaceAgentMessage{}, fmt.Errorf("append workspace agent message: %w", err)
 	}
@@ -984,11 +992,15 @@ func (s *configStore) AppendWorkspaceAgentMessageTx(ctx context.Context, tx *sql
 	if err != nil {
 		return WorkspaceAgentMessage{}, err
 	}
+	executedSkillJSON, err := marshalWorkspaceAgentExecutedSkill(message.ExecutedSkill)
+	if err != nil {
+		return WorkspaceAgentMessage{}, err
+	}
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, message.EvidenceCount, message.CreatedAt)
+		INSERT INTO workspace_agent_messages (session_id, workspace_id, surface, role, kind, prompt, content, skill_name, executed_skill, evidence_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, message.SessionID, message.WorkspaceID, message.Surface, message.Role, message.Kind, message.Prompt, message.Content, message.SkillName, executedSkillJSON, message.EvidenceCount, message.CreatedAt)
 	if err != nil {
 		return WorkspaceAgentMessage{}, fmt.Errorf("append workspace agent message: %w", err)
 	}
@@ -1098,6 +1110,7 @@ func newWorkspaceAgentMessageRecord(ctx context.Context, getSession func(context
 		Prompt:        strings.TrimSpace(input.Prompt),
 		Content:       content,
 		SkillName:     strings.TrimSpace(input.SkillName),
+		ExecutedSkill: normalizeWorkspaceAgentExecutedSkill(input.ExecutedSkill),
 		EvidenceCount: input.EvidenceCount,
 		CreatedAt:     nowRFC3339(),
 	}
@@ -1155,7 +1168,7 @@ func (s *configStore) ListWorkspaceAgentSessions(ctx context.Context, workspaceI
 
 func (s *configStore) ListWorkspaceAgentMessages(ctx context.Context, sessionID string) ([]WorkspaceAgentMessage, error) {
 	rows, err := s.appDB.QueryContext(ctx, `
-		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at
+		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, executed_skill, evidence_count, created_at
 		FROM workspace_agent_messages
 		WHERE session_id = ?
 		ORDER BY id ASC;
@@ -1168,9 +1181,15 @@ func (s *configStore) ListWorkspaceAgentMessages(ctx context.Context, sessionID 
 	messages := []WorkspaceAgentMessage{}
 	for rows.Next() {
 		var message WorkspaceAgentMessage
-		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &message.EvidenceCount, &message.CreatedAt); err != nil {
+		var executedSkillJSON string
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &executedSkillJSON, &message.EvidenceCount, &message.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan workspace agent message: %w", err)
 		}
+		executedSkill, err := unmarshalWorkspaceAgentExecutedSkill(executedSkillJSON)
+		if err != nil {
+			return nil, err
+		}
+		message.ExecutedSkill = executedSkill
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {
@@ -1187,7 +1206,7 @@ func (s *configStore) ListWorkspaceAgentMessagesForWorkspace(ctx context.Context
 	}
 
 	rows, err := s.appDB.QueryContext(ctx, `
-		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, evidence_count, created_at
+		SELECT id, session_id, workspace_id, surface, role, kind, prompt, content, skill_name, executed_skill, evidence_count, created_at
 		FROM workspace_agent_messages
 		WHERE session_id = ? AND workspace_id = ?
 		ORDER BY id ASC;
@@ -1200,9 +1219,15 @@ func (s *configStore) ListWorkspaceAgentMessagesForWorkspace(ctx context.Context
 	messages := []WorkspaceAgentMessage{}
 	for rows.Next() {
 		var message WorkspaceAgentMessage
-		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &message.EvidenceCount, &message.CreatedAt); err != nil {
+		var executedSkillJSON string
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.WorkspaceID, &message.Surface, &message.Role, &message.Kind, &message.Prompt, &message.Content, &message.SkillName, &executedSkillJSON, &message.EvidenceCount, &message.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan workspace agent message: %w", err)
 		}
+		executedSkill, err := unmarshalWorkspaceAgentExecutedSkill(executedSkillJSON)
+		if err != nil {
+			return nil, err
+		}
+		message.ExecutedSkill = executedSkill
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {
@@ -2279,6 +2304,47 @@ func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
+func normalizeWorkspaceAgentExecutedSkill(skill *WorkspaceAgentExecutedSkill) *WorkspaceAgentExecutedSkill {
+	if skill == nil {
+		return nil
+	}
+	normalized := &WorkspaceAgentExecutedSkill{
+		Name:        strings.TrimSpace(skill.Name),
+		Label:       strings.TrimSpace(skill.Label),
+		RoutedBy:    strings.TrimSpace(skill.RoutedBy),
+		Reason:      strings.TrimSpace(skill.Reason),
+		DisplayText: strings.TrimSpace(skill.DisplayText),
+	}
+	if normalized.Name == "" && normalized.Label == "" && normalized.RoutedBy == "" && normalized.Reason == "" && normalized.DisplayText == "" {
+		return nil
+	}
+	return normalized
+}
+
+func marshalWorkspaceAgentExecutedSkill(skill *WorkspaceAgentExecutedSkill) (string, error) {
+	normalized := normalizeWorkspaceAgentExecutedSkill(skill)
+	if normalized == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("encode workspace agent executed skill: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func unmarshalWorkspaceAgentExecutedSkill(raw string) (*WorkspaceAgentExecutedSkill, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	var skill WorkspaceAgentExecutedSkill
+	if err := json.Unmarshal([]byte(trimmed), &skill); err != nil {
+		return nil, fmt.Errorf("decode workspace agent executed skill: %w", err)
+	}
+	return normalizeWorkspaceAgentExecutedSkill(&skill), nil
+}
+
 func (s *configStore) ensureProvidersRegionColumn() error {
 	rows, err := s.appDB.Query(`PRAGMA table_info(providers);`)
 	if err != nil {
@@ -2357,6 +2423,39 @@ func (s *configStore) ensureHistoryDocumentColumns() error {
 				return fmt.Errorf("add %s.document_id column: %w", tableName, err)
 			}
 		}
+	}
+	return nil
+}
+
+func (s *configStore) ensureWorkspaceAgentExecutedSkillColumn() error {
+	rows, err := s.appDB.Query(`PRAGMA table_info(workspace_agent_messages);`)
+	if err != nil {
+		return fmt.Errorf("inspect workspace agent messages schema: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			colType    string
+			notNull    int
+			defaultV   sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primaryKey); err != nil {
+			return fmt.Errorf("scan workspace agent messages schema: %w", err)
+		}
+		if strings.EqualFold(name, "executed_skill") {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate workspace agent messages schema: %w", err)
+	}
+
+	if _, err := s.appDB.Exec(`ALTER TABLE workspace_agent_messages ADD COLUMN executed_skill TEXT NOT NULL DEFAULT '';`); err != nil {
+		return fmt.Errorf("add workspace agent messages executed_skill column: %w", err)
 	}
 	return nil
 }

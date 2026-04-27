@@ -14,21 +14,27 @@ type workspaceAgentQuery interface {
 	Promote(ctx context.Context, input WorkspaceKnowledgePromotionInput) error
 }
 
+type workspaceAgentWikiRunner interface {
+	Start(ctx context.Context, input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error)
+}
+
 type workspaceAgentService struct {
 	store *configStore
 	query workspaceAgentQuery
+	wiki  workspaceAgentWikiRunner
 }
 
-func newWorkspaceAgentService(store *configStore, query workspaceAgentQuery) *workspaceAgentService {
-	return &workspaceAgentService{store: store, query: query}
+func newWorkspaceAgentService(store *configStore, query workspaceAgentQuery, wiki workspaceAgentWikiRunner) *workspaceAgentService {
+	return &workspaceAgentService{store: store, query: query, wiki: wiki}
+}
+
+func (s *workspaceAgentService) ListSkills() []WorkspaceAgentSkillDefinition {
+	return listWorkspaceAgentSkills()
 }
 
 func (s *workspaceAgentService) Ask(ctx context.Context, input WorkspaceAgentAskInput) (WorkspaceAgentAskResult, error) {
 	if s == nil || s.store == nil {
 		return WorkspaceAgentAskResult{}, fmt.Errorf("workspace agent store is required")
-	}
-	if s.query == nil {
-		return WorkspaceAgentAskResult{}, fmt.Errorf("workspace agent query is required")
 	}
 
 	workspaceID := strings.TrimSpace(input.WorkspaceID)
@@ -46,6 +52,7 @@ func (s *workspaceAgentService) Ask(ctx context.Context, input WorkspaceAgentAsk
 	if err != nil {
 		return WorkspaceAgentAskResult{}, err
 	}
+	input.Surface = askSurface
 
 	sessionID := strings.TrimSpace(input.SessionID)
 	var (
@@ -72,12 +79,11 @@ func (s *workspaceAgentService) Ask(ctx context.Context, input WorkspaceAgentAsk
 		}
 	}
 
-	queryResult, err := s.query.Query(ctx, WorkspaceKnowledgeQueryInput{
-		WorkspaceID: workspaceID,
-		ProviderID:  input.ProviderID,
-		ModelID:     input.ModelID,
-		Question:    buildWorkspaceAgentQueryQuestion(question, input, recentMessages),
-	})
+	executedSkill, err := resolveWorkspaceAgentSkill(input)
+	if err != nil {
+		return WorkspaceAgentAskResult{}, err
+	}
+	queryResult, err := s.executeSkill(ctx, executedSkill, input, recentMessages)
 	if err != nil {
 		return WorkspaceAgentAskResult{}, err
 	}
@@ -117,7 +123,8 @@ func (s *workspaceAgentService) Ask(ctx context.Context, input WorkspaceAgentAsk
 			Kind:          "answer",
 			Prompt:        question,
 			Content:       strings.TrimSpace(queryResult.Answer),
-			SkillName:     "ask_with_evidence",
+			SkillName:     executedSkill.Name,
+			ExecutedSkill: &executedSkill,
 			EvidenceCount: len(queryResult.Evidence),
 		})
 		if appendErr != nil {
@@ -139,8 +146,68 @@ func (s *workspaceAgentService) Ask(ctx context.Context, input WorkspaceAgentAsk
 		Session:          session,
 		UserMessage:      userMessage,
 		AssistantMessage: assistantMessage,
+		ExecutedSkill:    executedSkill,
 		Query:            queryResult,
 	}, nil
+}
+
+func (s *workspaceAgentService) executeSkill(ctx context.Context, skill WorkspaceAgentExecutedSkill, input WorkspaceAgentAskInput, recentMessages []WorkspaceAgentMessage) (WorkspaceKnowledgeQueryResult, error) {
+	question := strings.TrimSpace(input.Question)
+	switch skill.Name {
+	case string(WorkspaceAgentSkillBuildMemory):
+		if s.wiki == nil {
+			return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace wiki service is unavailable")
+		}
+		job, err := s.wiki.Start(ctx, WorkspaceWikiScanStartInput{
+			WorkspaceID: input.WorkspaceID,
+			ProviderID:  input.ProviderID,
+			ModelID:     input.ModelID,
+		})
+		if err != nil {
+			return WorkspaceKnowledgeQueryResult{}, err
+		}
+		return WorkspaceKnowledgeQueryResult{Answer: fmt.Sprintf("Started workspace memory build %s.", job.JobID)}, nil
+	case string(WorkspaceAgentSkillTaskPlanning):
+		if s.query == nil {
+			return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace agent query is required")
+		}
+		return s.query.Query(ctx, WorkspaceKnowledgeQueryInput{
+			WorkspaceID: input.WorkspaceID,
+			ProviderID:  input.ProviderID,
+			ModelID:     input.ModelID,
+			Question:    buildWorkspaceAgentSkillPrompt("Task planning mode", input, recentMessages),
+		})
+	case string(WorkspaceAgentSkillReadingOutputs):
+		if s.query == nil {
+			return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace agent query is required")
+		}
+		return s.query.Query(ctx, WorkspaceKnowledgeQueryInput{
+			WorkspaceID: input.WorkspaceID,
+			ProviderID:  input.ProviderID,
+			ModelID:     input.ModelID,
+			Question:    buildWorkspaceAgentSkillPrompt("Reading outputs mode", input, recentMessages),
+		})
+	case string(WorkspaceAgentSkillCrossSource):
+		if s.query == nil {
+			return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace agent query is required")
+		}
+		return s.query.Query(ctx, WorkspaceKnowledgeQueryInput{
+			WorkspaceID: input.WorkspaceID,
+			ProviderID:  input.ProviderID,
+			ModelID:     input.ModelID,
+			Question:    buildWorkspaceAgentSkillPrompt("Cross-source synthesis mode", input, recentMessages),
+		})
+	default:
+		if s.query == nil {
+			return WorkspaceKnowledgeQueryResult{}, fmt.Errorf("workspace agent query is required")
+		}
+		return s.query.Query(ctx, WorkspaceKnowledgeQueryInput{
+			WorkspaceID: input.WorkspaceID,
+			ProviderID:  input.ProviderID,
+			ModelID:     input.ModelID,
+			Question:    buildWorkspaceAgentQueryQuestion(question, input, recentMessages),
+		})
+	}
 }
 
 func withWorkspaceAgentTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {

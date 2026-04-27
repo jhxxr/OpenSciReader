@@ -51,8 +51,8 @@ func (a *App) startup(ctx context.Context) {
 	a.pdf = newPDFService(store)
 	a.translator = newPDFTranslateManagerOrPanic(paths, store, a.ctx)
 	a.query = newWorkspaceKnowledgeQueryService(paths, a.gateway)
-	a.agent = newWorkspaceAgentService(store, a.query)
 	a.wiki = newWorkspaceWikiService(paths, store, a.pdf, a.gateway)
+	a.agent = newWorkspaceAgentService(store, a.query, a.wiki)
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -201,6 +201,13 @@ func (a *App) AskWorkspaceAgent(input WorkspaceAgentAskInput) (WorkspaceAgentAsk
 		return WorkspaceAgentAskResult{}, fmt.Errorf("workspace agent service is unavailable")
 	}
 	return a.agent.Ask(a.ctx, input)
+}
+
+func (a *App) ListWorkspaceAgentSkills() []WorkspaceAgentSkillDefinition {
+	if a.agent == nil {
+		return listWorkspaceAgentSkills()
+	}
+	return a.agent.ListSkills()
 }
 
 func (a *App) StartWorkspaceWikiScan(input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {

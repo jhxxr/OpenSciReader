@@ -138,6 +138,10 @@ export function ListWorkspaceAgentSessions(arg1) {
   return window['go']['main']['App']['ListWorkspaceAgentSessions'](arg1);
 }
 
+export function ListWorkspaceAgentSkills() {
+  return window['go']['main']['App']['ListWorkspaceAgentSkills']();
+}
+
 export function ListWorkspaceKnowledgeSources(arg1) {
   return window['go']['main']['App']['ListWorkspaceKnowledgeSources'](arg1);
 }

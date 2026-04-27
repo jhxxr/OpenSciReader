@@ -20,8 +20,27 @@ export interface WorkspaceAgentMessage {
   prompt: string;
   content: string;
   skillName: string;
+  executedSkill?: WorkspaceAgentExecutedSkill | null;
   evidenceCount: number;
   createdAt: string;
+}
+
+export interface WorkspaceAgentSkillDefinition {
+  name: string;
+  label: string;
+  description: string;
+  manualEnabled: boolean;
+  autoEnabled: boolean;
+  readerEnabled: boolean;
+  workspaceOnly: boolean;
+}
+
+export interface WorkspaceAgentExecutedSkill {
+  name: string;
+  label: string;
+  routedBy: 'manual' | 'auto';
+  reason: string;
+  displayText: string;
 }
 
 export interface WorkspaceAgentAskInput {
@@ -29,6 +48,7 @@ export interface WorkspaceAgentAskInput {
   documentId?: string;
   sessionId?: string;
   surface: string;
+  skillName?: string;
   includeDocumentContext?: boolean;
   includeWorkspaceContext?: boolean;
   selection?: string;
@@ -42,6 +62,7 @@ export interface WorkspaceAgentAskResult {
   session: WorkspaceAgentSession;
   userMessage: WorkspaceAgentMessage;
   assistantMessage: WorkspaceAgentMessage;
+  executedSkill: WorkspaceAgentExecutedSkill;
   query: {
     answer: string;
     evidence: Array<{

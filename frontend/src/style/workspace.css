@@ -137,6 +137,54 @@
   font-size: 12px;
 }
 
+.workspace-agent-skill-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-agent-skill-pill {
+  border: 1px solid var(--border-color);
+  background: var(--input-bg);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.workspace-agent-skill-pill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.workspace-agent-skill-pill-active {
+  color: var(--text-color);
+  border-color: var(--accent-color);
+}
+
+.workspace-agent-skill-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--input-bg));
+  color: var(--text-color);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.workspace-agent-executed-skill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.workspace-agent-executed-skill-detail {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .workspace-agent-disabled,
 .workspace-agent-empty-state {
   border: 1px dashed var(--border-color);

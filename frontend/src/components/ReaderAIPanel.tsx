@@ -24,6 +24,7 @@ import {
   buildPaperImageSummaryInstruction,
 } from "../lib/paperFigurePrompt";
 import { useReaderStore } from "../store/readerStore";
+import { useWorkspaceAgentStore } from "../store/workspaceAgentStore";
 import type {
   AIWorkspaceConfig,
   ModelRecord,
@@ -33,6 +34,10 @@ import { DEFAULT_AI_WORKSPACE_CONFIG } from "../types/config";
 import type { GatewayStreamEvent } from "../types/gateway";
 import type { ChatHistoryEntry } from "../types/history";
 import type { TabItem } from "../store/tabStore";
+import type {
+  WorkspaceAgentExecutedSkill,
+  WorkspaceAgentSkillDefinition,
+} from "../types/workspaceAgent";
 import type {
   WorkspaceKnowledgeQueryResult,
   WorkspaceKnowledgeEvidenceHit,
@@ -91,6 +96,7 @@ interface CopilotState {
   };
   isAsking: boolean;
   answer: string | null;
+  answerSkill: WorkspaceAgentExecutedSkill | null;
   answerError: string | null;
   evidence: {
     entities: WorkspaceKnowledgeEvidenceHit[];
@@ -117,10 +123,26 @@ interface ReaderAskScope {
   workspace: boolean;
 }
 
+const EMPTY_COPILOT_STATE: CopilotState = {
+  question: '',
+  scope: { selection: false, page: false, document: false, workspace: false },
+  isAsking: false,
+  answer: null,
+  answerSkill: null,
+  answerError: null,
+  evidence: { entities: [], claims: [], tasks: [], sources: [] },
+  expandedGroups: { entities: false, claims: false, tasks: false, sources: false },
+  candidates: [],
+  expandedCandidates: new Set(),
+  promotingIds: new Set(),
+  promoteError: null,
+};
+
 interface ReaderAskInputParams<TDocumentId extends string> {
   workspaceId: string;
   sessionId: string | null;
   documentId: TDocumentId;
+  skillName: string | null;
   selection: string;
   activePage: number;
   llmProviderId: number;
@@ -141,6 +163,7 @@ function buildReaderAskInput<TDocumentId extends string>(
     sessionId: params.sessionId ?? undefined,
     surface: 'reader',
     documentId: params.documentId,
+    skillName: params.skillName ?? undefined,
     includeDocumentContext: params.scope.document,
     includeWorkspaceContext: params.scope.workspace,
     selection: params.scope.selection ? params.selection : undefined,
@@ -166,6 +189,14 @@ function renderConfidenceBadge(confidence: number): React.ReactNode | null {
     return null;
   }
   return <span className="badge badge-accent">{Math.round(confidence * 100)}%</span>;
+}
+
+function formatExecutedSkillDetail(executedSkill: WorkspaceAgentExecutedSkill): string {
+  return executedSkill.routedBy === 'manual'
+    ? 'Manual skill'
+    : executedSkill.reason
+      ? `Auto routed: ${executedSkill.reason.replaceAll('_', ' ')}`
+      : 'Auto routed';
 }
 
 function formatSourceSummary(sourceRefs: any[]): string {
@@ -254,11 +285,17 @@ export function ReaderAIPanel({
   setLlmProviderId,
   setLlmModelId,
 }: ReaderAIPanelProps) {
+  const workspaceID = tab.workspaceId ?? "";
+  const workspaceId = useMemo(() => tab.workspaceId || '', [tab.workspaceId]);
+  const documentId = useMemo(() => tab.documentId || '', [tab.documentId]);
   const selection = useReaderStore((state) => state.selection);
   const snapshot = useReaderStore((state) => state.snapshot);
   const activePage = useReaderStore((state) => state.activePage);
   const figureCaptures = useReaderStore((state) => state.figureCaptures);
   const setSnapshot = useReaderStore((state) => state.setSnapshot);
+  const ensureWorkspace = useWorkspaceAgentStore((state) => state.ensureWorkspace);
+  const askWorkspaceAgent = useWorkspaceAgentStore((state) => state.ask);
+  const workspacePane = useWorkspaceAgentStore((state) => (workspaceId ? state.panes[workspaceId] : undefined));
 
   const [workspaceConfig, setWorkspaceConfig] = useState<AIWorkspaceConfig>(
     DEFAULT_AI_WORKSPACE_CONFIG,
@@ -277,22 +314,12 @@ export function ReaderAIPanel({
   const [generatedFigure, setGeneratedFigure] = useState("");
   const [drawingError, setDrawingError] = useState<string | null>(null);
   const [isGeneratingFigure, setIsGeneratingFigure] = useState(false);
+  const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
+  const [readerSkills, setReaderSkills] = useState<WorkspaceAgentSkillDefinition[]>([]);
   const activeEventNameRef = useRef<string | null>(null);
   const hydratedHistoryKeyRef = useRef("");
 
-  const [copilotState, setCopilotState] = useState<CopilotState>({
-    question: '',
-    scope: { selection: false, page: false, document: false, workspace: false },
-    isAsking: false,
-    answer: null,
-    answerError: null,
-    evidence: { entities: [], claims: [], tasks: [], sources: [] },
-    expandedGroups: { entities: false, claims: false, tasks: false, sources: false },
-    candidates: [],
-    expandedCandidates: new Set(),
-    promotingIds: new Set(),
-    promoteError: null,
-  });
+  const [copilotState, setCopilotState] = useState<CopilotState>(EMPTY_COPILOT_STATE);
 
   const currentFigureCapture = useMemo(
     () =>
@@ -321,13 +348,76 @@ export function ReaderAIPanel({
   );
   const drawingProviderName = drawingProviderConfig?.provider.name ?? "";
 
-  const workspaceID = tab.workspaceId ?? "";
-  const workspaceId = useMemo(() => tab.workspaceId || '', [tab.workspaceId]);
-  const documentId = useMemo(() => tab.documentId || '', [tab.documentId]);
+  const sharedSessionId = workspacePane?.activeSessionId ?? null;
 
   useEffect(() => {
     setSessionId(initialSessionId);
   }, [initialSessionId, tab.id]);
+
+  useEffect(() => {
+    if (workspaceId) {
+      void ensureWorkspace(workspaceId);
+    }
+  }, [ensureWorkspace, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || sharedSessionId === sessionId) {
+      return;
+    }
+
+    setSessionId(sharedSessionId);
+    onSessionChange(sharedSessionId);
+  }, [onSessionChange, sessionId, sharedSessionId, workspaceId]);
+
+  useEffect(() => {
+    setSelectedSkillName(null);
+    setCopilotState(EMPTY_COPILOT_STATE);
+  }, [tab.id, workspaceId, documentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!workspaceId) {
+      setReaderSkills([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void workspaceAgentApi.listSkills()
+      .then((skills) => {
+        if (cancelled) {
+          return;
+        }
+
+        setReaderSkills(
+          skills.filter(
+            (skill) =>
+              skill.manualEnabled
+              && skill.readerEnabled,
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReaderSkills([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!selectedSkillName) {
+      return;
+    }
+
+    if (!readerSkills.some((skill) => skill.name === selectedSkillName)) {
+      setSelectedSkillName(null);
+    }
+  }, [readerSkills, selectedSkillName]);
 
   const shouldShowCopilot = useMemo(() => {
     return workspaceId && activeLLMModel;
@@ -492,10 +582,11 @@ export function ReaderAIPanel({
     setCopilotState(prev => ({ ...prev, isAsking: true, answerError: null }));
 
     try {
-      const result = await workspaceAgentApi.ask(buildReaderAskInput({
+      const result = await askWorkspaceAgent(buildReaderAskInput({
         workspaceId,
         sessionId,
         documentId,
+        skillName: selectedSkillName,
         selection: selection.cleaned,
         activePage,
         llmProviderId,
@@ -514,14 +605,16 @@ export function ReaderAIPanel({
           ...prev,
           isAsking: false,
           answer: null,
+          answerSkill: null,
           answerError: '无法连接到知识服务',
+          evidence: EMPTY_COPILOT_STATE.evidence,
+          candidates: EMPTY_COPILOT_STATE.candidates,
+          expandedCandidates: new Set(),
+          promotingIds: new Set(),
+          promoteError: null,
         }));
         return;
       }
-
-      const nextSessionId = result.session.id || null;
-      setSessionId(nextSessionId);
-      onSessionChange(nextSessionId);
 
       // Group evidence by kind
       const evidence: CopilotState['evidence'] = {
@@ -543,6 +636,7 @@ export function ReaderAIPanel({
         ...prev,
         isAsking: false,
         answer: result.query.answer,
+        answerSkill: result.executedSkill,
         evidence,
         candidates: result.query.candidates,
       }));
@@ -551,7 +645,13 @@ export function ReaderAIPanel({
         ...prev,
         isAsking: false,
         answer: null,
+        answerSkill: null,
         answerError: getErrorMessage(error, '查询失败'),
+        evidence: EMPTY_COPILOT_STATE.evidence,
+        candidates: EMPTY_COPILOT_STATE.candidates,
+        expandedCandidates: new Set(),
+        promotingIds: new Set(),
+        promoteError: null,
       }));
     }
   }
@@ -559,9 +659,32 @@ export function ReaderAIPanel({
   const providerHint = activeLLMModel
     ? `${activeLLMConfig?.provider.name ?? "LLM"} / ${activeLLMModel.modelId}`
     : "请选择可用的 LLM Provider 和 Model";
+  const readerSkillOptions: Array<{ name: string | null; label: string; description?: string }> = [
+    { name: null, label: 'Auto' },
+    ...readerSkills.map((skill) => ({
+      name: skill.name,
+      label: skill.label,
+      description: skill.description,
+    })),
+  ];
 
   const askSection = (
     <div className="reader-ask-section">
+      <div className="workspace-agent-skill-strip">
+        {readerSkillOptions.map((skill) => (
+          <button
+            key={skill.name ?? 'auto'}
+            type="button"
+            className={`workspace-agent-skill-pill ${selectedSkillName === skill.name ? 'workspace-agent-skill-pill-active' : ''}`}
+            onClick={() => setSelectedSkillName(skill.name)}
+            title={skill.description}
+            disabled={copilotState.isAsking}
+          >
+            {skill.label}
+          </button>
+        ))}
+      </div>
+
       <textarea
         className="reader-ask-textarea"
         value={copilotState.question}
@@ -653,7 +776,15 @@ export function ReaderAIPanel({
       )}
 
       {!copilotState.isAsking && !copilotState.answerError && copilotState.answer && (
-        <MarkdownPreview content={copilotState.answer} />
+        <>
+          {copilotState.answerSkill ? (
+            <div className="workspace-agent-executed-skill">
+              <span className="workspace-agent-skill-badge">{copilotState.answerSkill.displayText || copilotState.answerSkill.label}</span>
+              <span className="workspace-agent-executed-skill-detail">{formatExecutedSkillDetail(copilotState.answerSkill)}</span>
+            </div>
+          ) : null}
+          <MarkdownPreview content={copilotState.answer} />
+        </>
       )}
     </div>
   );

@@ -2,10 +2,12 @@ import type {
   WorkspaceAgentAskInput,
   WorkspaceAgentAskResult,
   WorkspaceAgentMessage,
+  WorkspaceAgentSkillDefinition,
   WorkspaceAgentSession,
 } from '../types/workspaceAgent';
 
 interface WailsWorkspaceAgentApp {
+  ListWorkspaceAgentSkills: () => Promise<WorkspaceAgentSkillDefinition[]>;
   ListWorkspaceAgentSessions: (workspaceId: string) => Promise<WorkspaceAgentSession[]>;
   CreateWorkspaceAgentSession: (input: {
     workspaceId: string;
@@ -46,12 +48,24 @@ function rememberSession(session: WorkspaceAgentSession): WorkspaceAgentSession 
 }
 
 export const workspaceAgentApi = {
-  async listSessions(workspaceId: string): Promise<WorkspaceAgentSession[]> {
+  async listSkills(): Promise<WorkspaceAgentSkillDefinition[]> {
     const app = getApp();
-    if (!app || workspaceId.trim() === '') {
+    if (!app) {
+      throw new Error('workspace agent API is unavailable');
+    }
+    return app.ListWorkspaceAgentSkills();
+  },
+
+  async listSessions(workspaceId: string): Promise<WorkspaceAgentSession[]> {
+    const trimmedWorkspaceId = workspaceId.trim();
+    if (trimmedWorkspaceId === '') {
       return [];
     }
-    return rememberSessions(await app.ListWorkspaceAgentSessions(workspaceId));
+    const app = getApp();
+    if (!app) {
+      throw new Error('workspace agent API is unavailable');
+    }
+    return rememberSessions(await app.ListWorkspaceAgentSessions(trimmedWorkspaceId));
   },
 
   async createSession(workspaceId: string, title: string, surface: string): Promise<WorkspaceAgentSession> {
@@ -63,11 +77,17 @@ export const workspaceAgentApi = {
   },
 
   async listMessages(sessionId: string): Promise<WorkspaceAgentMessage[]> {
-    const app = getApp();
     const trimmedSessionId = sessionId.trim();
-    const workspaceId = workspaceIdBySessionId.get(trimmedSessionId)?.trim() ?? '';
-    if (!app || workspaceId === '' || trimmedSessionId === '') {
+    if (trimmedSessionId === '') {
       return [];
+    }
+    const workspaceId = workspaceIdBySessionId.get(trimmedSessionId)?.trim() ?? '';
+    if (workspaceId === '') {
+      return [];
+    }
+    const app = getApp();
+    if (!app) {
+      throw new Error('workspace agent API is unavailable');
     }
     return app.ListWorkspaceAgentMessagesForWorkspace(workspaceId, trimmedSessionId);
   },

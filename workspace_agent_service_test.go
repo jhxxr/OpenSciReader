@@ -13,6 +13,12 @@ type stubWorkspaceAgentQuery struct {
 	err    error
 }
 
+type stubWorkspaceAgentWiki struct {
+	starts []WorkspaceWikiScanStartInput
+	job    WorkspaceWikiScanJob
+	err    error
+}
+
 func (s *stubWorkspaceAgentQuery) Query(_ context.Context, input WorkspaceKnowledgeQueryInput) (WorkspaceKnowledgeQueryResult, error) {
 	s.inputs = append(s.inputs, input)
 	return s.result, s.err
@@ -20,6 +26,305 @@ func (s *stubWorkspaceAgentQuery) Query(_ context.Context, input WorkspaceKnowle
 
 func (s *stubWorkspaceAgentQuery) Promote(_ context.Context, _ WorkspaceKnowledgePromotionInput) error {
 	return nil
+}
+
+func (s *stubWorkspaceAgentWiki) Start(_ context.Context, input WorkspaceWikiScanStartInput) (WorkspaceWikiScanJob, error) {
+	s.starts = append(s.starts, input)
+	if s.job.JobID == "" {
+		s.job = WorkspaceWikiScanJob{JobID: "job-1"}
+	}
+	return s.job, s.err
+}
+
+func TestWorkspaceAgentServiceAskUsesExplicitTaskPlanningSkill(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Planned response."}}
+	service := newWorkspaceAgentService(store, query, nil)
+
+	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceWorkspace),
+		SkillName:   string(WorkspaceAgentSkillTaskPlanning),
+		Question:    "Plan the next experiments for this topic.",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.ExecutedSkill.Name != string(WorkspaceAgentSkillTaskPlanning) {
+		t.Fatalf("ExecutedSkill.Name = %q, want %q", result.ExecutedSkill.Name, WorkspaceAgentSkillTaskPlanning)
+	}
+	if len(query.inputs) != 1 {
+		t.Fatalf("len(query.inputs) = %d, want 1", len(query.inputs))
+	}
+	if !strings.Contains(query.inputs[0].Question, "Task planning mode") {
+		t.Fatalf("query.inputs[0].Question = %q, want task-planning prompt prefix", query.inputs[0].Question)
+	}
+	if result.AssistantMessage.SkillName != string(WorkspaceAgentSkillTaskPlanning) {
+		t.Fatalf("AssistantMessage.SkillName = %q, want %q", result.AssistantMessage.SkillName, WorkspaceAgentSkillTaskPlanning)
+	}
+}
+
+func TestWorkspaceAgentServiceAskAutoRoutesReaderSummariesToReadingOutputs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Reading note."}}
+	service := newWorkspaceAgentService(store, query, nil)
+
+	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID:            workspace.ID,
+		Surface:                string(WorkspaceAgentSurfaceReader),
+		IncludeDocumentContext: true,
+		DocumentID:             "doc-1",
+		Question:               "Summarize this page into reading notes.",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.ExecutedSkill.Name != string(WorkspaceAgentSkillReadingOutputs) {
+		t.Fatalf("ExecutedSkill.Name = %q, want %q", result.ExecutedSkill.Name, WorkspaceAgentSkillReadingOutputs)
+	}
+	if result.ExecutedSkill.RoutedBy != "auto" {
+		t.Fatalf("ExecutedSkill.RoutedBy = %q, want auto", result.ExecutedSkill.RoutedBy)
+	}
+}
+
+func TestWorkspaceAgentServiceAskUsesBuildMemorySkill(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	wiki := &stubWorkspaceAgentWiki{}
+	service := newWorkspaceAgentService(store, &stubWorkspaceAgentQuery{}, wiki)
+
+	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceWorkspace),
+		SkillName:   string(WorkspaceAgentSkillBuildMemory),
+		ProviderID:  7,
+		ModelID:     11,
+		Question:    "Build workspace memory now.",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if len(wiki.starts) != 1 {
+		t.Fatalf("len(wiki.starts) = %d, want 1", len(wiki.starts))
+	}
+	if result.Query.Answer == "" {
+		t.Fatal("Query.Answer is empty, want build status text")
+	}
+}
+
+func TestWorkspaceAgentServiceAskRejectsUnsupportedManualSkill(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Should not run."}}
+	service := newWorkspaceAgentService(store, query, nil)
+
+	_, err = service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceWorkspace),
+		SkillName:   string(WorkspaceAgentSkillPromoteToWiki),
+		Question:    "Promote this answer to the wiki.",
+	})
+	if err == nil {
+		t.Fatal("Ask() error = nil, want unsupported skill error")
+	}
+	if !strings.Contains(err.Error(), "unsupported workspace agent skill") {
+		t.Fatalf("Ask() error = %v, want unsupported skill error", err)
+	}
+	if len(query.inputs) != 0 {
+		t.Fatalf("len(query.inputs) = %d, want 0", len(query.inputs))
+	}
+}
+
+func TestWorkspaceAgentServiceAskRejectsManualSkillForWrongSurface(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Should not run."}}
+	service := newWorkspaceAgentService(store, query, nil)
+
+	_, err = service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceReader),
+		SkillName:   string(WorkspaceAgentSkillTaskPlanning),
+		Question:    "Plan the next experiments for this topic.",
+	})
+	if err == nil {
+		t.Fatal("Ask() error = nil, want surface validation error")
+	}
+	if !strings.Contains(err.Error(), "not available on reader surface") {
+		t.Fatalf("Ask() error = %v, want reader-surface validation", err)
+	}
+	if len(query.inputs) != 0 {
+		t.Fatalf("len(query.inputs) = %d, want 0", len(query.inputs))
+	}
+}
+
+func TestWorkspaceAgentServiceAskDoesNotAutoRouteReaderPlanningToWrongSurfaceSkill(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Grounded answer."}}
+	service := newWorkspaceAgentService(store, query, nil)
+
+	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceReader),
+		Question:    "What are the next steps for this paper?",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.ExecutedSkill.Name != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("ExecutedSkill.Name = %q, want %q", result.ExecutedSkill.Name, WorkspaceAgentSkillAskWithEvidence)
+	}
+	if len(query.inputs) != 1 {
+		t.Fatalf("len(query.inputs) = %d, want 1", len(query.inputs))
+	}
+	if strings.Contains(query.inputs[0].Question, "Task planning mode") {
+		t.Fatalf("query.inputs[0].Question = %q, did not expect task-planning prompt", query.inputs[0].Question)
+	}
+}
+
+func TestWorkspaceAgentServiceAskDoesNotAutoStartBuildMemory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	paths := newTestAppPaths(t)
+	store, err := newConfigStore(paths)
+	if err != nil {
+		t.Fatalf("newConfigStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspace, err := store.CreateWorkspace(ctx, WorkspaceUpsertInput{Name: "Agent Workspace"})
+	if err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Grounded answer."}}
+	wiki := &stubWorkspaceAgentWiki{}
+	service := newWorkspaceAgentService(store, query, wiki)
+
+	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
+		WorkspaceID: workspace.ID,
+		Surface:     string(WorkspaceAgentSurfaceWorkspace),
+		Question:    "Can you build memory from these notes?",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.ExecutedSkill.Name != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("ExecutedSkill.Name = %q, want %q", result.ExecutedSkill.Name, WorkspaceAgentSkillAskWithEvidence)
+	}
+	if len(wiki.starts) != 0 {
+		t.Fatalf("len(wiki.starts) = %d, want 0", len(wiki.starts))
+	}
+	if len(query.inputs) != 1 {
+		t.Fatalf("len(query.inputs) = %d, want 1", len(query.inputs))
+	}
+}
+
+func TestWorkspaceAgentServiceListSkillsIncludesDefaultAndUnsupportedSkills(t *testing.T) {
+	t.Parallel()
+
+	service := newWorkspaceAgentService(nil, nil, nil)
+	skills := service.ListSkills()
+	if len(skills) == 0 {
+		t.Fatal("ListSkills() returned no skills")
+	}
+	if skills[0].Name != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("skills[0].Name = %q, want %q", skills[0].Name, WorkspaceAgentSkillAskWithEvidence)
+	}
+	var foundUnsupported bool
+	for _, skill := range skills {
+		if skill.Name == string(WorkspaceAgentSkillPromoteToWiki) {
+			foundUnsupported = true
+			if skill.ManualEnabled {
+				t.Fatal("promote_to_wiki manual selection should be disabled")
+			}
+		}
+	}
+	if !foundUnsupported {
+		t.Fatal("ListSkills() missing promote_to_wiki")
+	}
 }
 
 func TestWorkspaceAgentServiceAskCreatesSessionAndMessages(t *testing.T) {
@@ -46,7 +351,7 @@ func TestWorkspaceAgentServiceAskCreatesSessionAndMessages(t *testing.T) {
 			Title: "Overview",
 		}},
 	}}
-	service := newWorkspaceAgentService(store, query)
+	service := newWorkspaceAgentService(store, query, nil)
 
 	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID: workspace.ID,
@@ -64,6 +369,12 @@ func TestWorkspaceAgentServiceAskCreatesSessionAndMessages(t *testing.T) {
 	}
 	if len(query.inputs) != 1 {
 		t.Fatalf("len(query.inputs) = %d, want 1", len(query.inputs))
+	}
+	if result.ExecutedSkill.Name != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("ExecutedSkill.Name = %q, want %q", result.ExecutedSkill.Name, WorkspaceAgentSkillAskWithEvidence)
+	}
+	if result.AssistantMessage.SkillName != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("AssistantMessage.SkillName = %q, want %q", result.AssistantMessage.SkillName, WorkspaceAgentSkillAskWithEvidence)
 	}
 
 	messages, err := store.ListWorkspaceAgentMessages(ctx, result.Session.ID)
@@ -90,6 +401,24 @@ func TestWorkspaceAgentServiceAskCreatesSessionAndMessages(t *testing.T) {
 	}
 	if messages[1].Content != "Grounded answer." {
 		t.Fatalf("messages[1].Content = %q, want %q", messages[1].Content, "Grounded answer.")
+	}
+	if messages[1].SkillName != string(WorkspaceAgentSkillAskWithEvidence) {
+		t.Fatalf("messages[1].SkillName = %q, want %q", messages[1].SkillName, WorkspaceAgentSkillAskWithEvidence)
+	}
+	if messages[1].ExecutedSkill == nil {
+		t.Fatal("messages[1].ExecutedSkill = nil, want persisted metadata")
+	}
+	if messages[1].ExecutedSkill.Name != result.ExecutedSkill.Name {
+		t.Fatalf("messages[1].ExecutedSkill.Name = %q, want %q", messages[1].ExecutedSkill.Name, result.ExecutedSkill.Name)
+	}
+	if messages[1].ExecutedSkill.RoutedBy != result.ExecutedSkill.RoutedBy {
+		t.Fatalf("messages[1].ExecutedSkill.RoutedBy = %q, want %q", messages[1].ExecutedSkill.RoutedBy, result.ExecutedSkill.RoutedBy)
+	}
+	if messages[1].ExecutedSkill.Reason != result.ExecutedSkill.Reason {
+		t.Fatalf("messages[1].ExecutedSkill.Reason = %q, want %q", messages[1].ExecutedSkill.Reason, result.ExecutedSkill.Reason)
+	}
+	if messages[1].ExecutedSkill.DisplayText != result.ExecutedSkill.DisplayText {
+		t.Fatalf("messages[1].ExecutedSkill.DisplayText = %q, want %q", messages[1].ExecutedSkill.DisplayText, result.ExecutedSkill.DisplayText)
 	}
 }
 
@@ -187,7 +516,7 @@ func TestWorkspaceAgentServiceAskUsesExistingSession(t *testing.T) {
 	}
 
 	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Reader-grounded answer."}}
-	service := newWorkspaceAgentService(store, query)
+	service := newWorkspaceAgentService(store, query, nil)
 
 	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID:             workspace.ID,
@@ -299,7 +628,7 @@ func TestWorkspaceAgentServiceAskUsesRecentSessionHistoryInDelegatedQuery(t *tes
 	}
 
 	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "Follow-up answer."}}
-	service := newWorkspaceAgentService(store, query)
+	service := newWorkspaceAgentService(store, query, nil)
 	_, err = service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID: workspace.ID,
 		SessionID:   session.ID,
@@ -449,7 +778,7 @@ func TestWorkspaceAgentServiceAskQueryFailureDoesNotPersistSession(t *testing.T)
 		t.Fatalf("CreateWorkspace() error = %v", err)
 	}
 
-	service := newWorkspaceAgentService(store, &stubWorkspaceAgentQuery{err: errors.New("query failed")})
+	service := newWorkspaceAgentService(store, &stubWorkspaceAgentQuery{err: errors.New("query failed")}, nil)
 	if _, err := service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID: workspace.ID,
 		Question:    "What changed?",
@@ -490,7 +819,7 @@ func TestWorkspaceAgentServiceAskRejectsInvalidSurface(t *testing.T) {
 		t.Fatalf("CreateWorkspace() error = %v", err)
 	}
 
-	service := newWorkspaceAgentService(store, &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "ok"}})
+	service := newWorkspaceAgentService(store, &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "ok"}}, nil)
 	if _, err := service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID: workspace.ID,
 		Surface:     "invalid-surface",
@@ -517,7 +846,7 @@ func TestWorkspaceAgentServiceAskAcceptsReaderContext(t *testing.T) {
 	}
 
 	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "ok"}}
-	service := newWorkspaceAgentService(store, query)
+	service := newWorkspaceAgentService(store, query, nil)
 	result, err := service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID:            workspace.ID,
 		Surface:                string(WorkspaceAgentSurfaceReader),
@@ -580,7 +909,7 @@ func TestWorkspaceAgentServiceAskOmitsDisabledReaderContextMarkers(t *testing.T)
 	}
 
 	query := &stubWorkspaceAgentQuery{result: WorkspaceKnowledgeQueryResult{Answer: "ok"}}
-	service := newWorkspaceAgentService(store, query)
+	service := newWorkspaceAgentService(store, query, nil)
 	_, err = service.Ask(ctx, WorkspaceAgentAskInput{
 		WorkspaceID: workspace.ID,
 		Surface:     string(WorkspaceAgentSurfaceReader),

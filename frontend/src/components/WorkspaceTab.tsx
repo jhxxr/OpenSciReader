@@ -10,12 +10,14 @@ type WorkspaceTabProps = Omit<WorkspaceKnowledgeModeProps, 'onSwitchMode'> & {
 export function WorkspaceTab(props: WorkspaceTabProps) {
   if (props.mode === 'sessions') {
     return (
-      <WorkspaceAgentShell
-        workspace={props.workspace}
-        llmProviderConfigs={props.llmProviderConfigs}
-        onSwitchMode={() => props.onChangeMode('knowledge')}
-      />
-    );
+        <WorkspaceAgentShell
+          workspace={props.workspace}
+          llmProviderConfigs={props.llmProviderConfigs}
+          wikiScanProviderId={props.wikiScanProviderId}
+          wikiScanModelId={props.wikiScanModelId}
+          onSwitchMode={() => props.onChangeMode('knowledge')}
+        />
+      );
   }
 
   return (

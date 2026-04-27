@@ -71,6 +71,8 @@ export function ListWorkspaceAgentMessagesForWorkspace(arg1:string,arg2:string):
 
 export function ListWorkspaceAgentSessions(arg1:string):Promise<Array<main.WorkspaceAgentSession>>;
 
+export function ListWorkspaceAgentSkills():Promise<Array<main.WorkspaceAgentSkillDefinition>>;
+
 export function ListWorkspaceKnowledgeSources(arg1:string):Promise<Array<main.WorkspaceKnowledgeSource>>;
 
 export function ListWorkspaceWikiPages(arg1:string):Promise<Array<main.WorkspaceWikiPage>>;
